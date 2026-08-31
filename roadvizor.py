@@ -8,8 +8,7 @@ from getmac import get_mac_address
 MAX_NUCLEOS = 16
 
 def titulo():
-        title = ["usuario","id_maquina","timestamp", "cpu_uso_geral","qtd_cpu_fisica","qtd_cpu_logica","cpu1","cpu2","cpu3","cpu4","cpu5",
-    "cpu6","cpu7","cpu8","cpu9","cpu10","cpu11","cpu12","cpu13","cpu14","cpu15","cpu16",
+        title = ["id_maquina","timestamp", "cpu",
     "ram_total","ram_uso","swap_total","swap_uso","proc_rodando","proc_esperando", "disco_total","disco_uso", 
     "rede_enviada", "rede_recebida","pacote_perdido_entrada","pacote_perdido_saida","latencia"]
         with open('./roadvizor.csv', 'a', newline='') as csvfile:
@@ -19,11 +18,11 @@ def titulo():
 def monitorar_sistema() :
     # CPU
     porcentagem_cpu = psutil.cpu_percent(interval=1)
-    cpu_por_nucleo = psutil.cpu_percent(interval=None, percpu=True)
-    cpu_times = psutil.cpu_times()
-    qtd_cpu_fisica = psutil.cpu_count(logical=False)
-    qtd_cpu_logica = psutil.cpu_count(logical=True)
-    freq_cpu = psutil.cpu_freq()
+    # cpu_por_nucleo = psutil.cpu_percent(interval=None, percpu=True)
+    # cpu_times = psutil.cpu_times()
+    # qtd_cpu_fisica = psutil.cpu_count(logical=False)
+    # qtd_cpu_logica = psutil.cpu_count(logical=True)
+    # freq_cpu = psutil.cpu_freq()
 
     # discretização 
     if porcentagem_cpu <= 50: 
@@ -66,21 +65,21 @@ def monitorar_sistema() :
 
     mensagem = []
 
-    mensagem_nucleos = []
-    for i in range(MAX_NUCLEOS):
-        try:
-            mensagem_nucleos.append(cpu_por_nucleo[i])
-        except IndexError:
-            mensagem_nucleos.append("null")
+    # mensagem_nucleos = []
+    # for i in range(MAX_NUCLEOS):
+    #     try:
+    #         mensagem_nucleos.append(cpu_por_nucleo[i])
+    #     except IndexError:
+    #         mensagem_nucleos.append("null")
 
-    mensagem.append(["Sophie",id_maquina,hora, porcentagem_cpu,qtd_cpu_fisica, qtd_cpu_logica, *mensagem_nucleos,ram.total, ram.used, swap.total,swap.used,proc_rodando,proc_esperando,uso_disco.total, uso_disco.used,io_rede.bytes_sent,io_rede.bytes_recv,io_rede.dropin,io_rede.dropout,latencia])
+    mensagem.append([id_maquina,hora, porcentagem_cpu,ram.total, ram.used, swap.total,swap.used,proc_rodando,proc_esperando,uso_disco.total, uso_disco.used,io_rede.bytes_sent,io_rede.bytes_recv,io_rede.dropin,io_rede.dropout,latencia])
 
     print(f"=== MONITORAMENTO - {datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} ===")
     print(f"Status da CPU: {status_cpu} ({porcentagem_cpu}%)")
-    print(f"Núcleos: {qtd_cpu_fisica} físicos | {qtd_cpu_logica} lógicos")
-    print(f"Uso por núcleo: {cpu_por_nucleo}")
-    print(f"Frequência CPU: {freq_cpu.current:.2f} MHz" if freq_cpu else "Frequência: N/A")
-    print(f"Tempos de CPU: User={cpu_times.user}s, System={cpu_times.system}s, Idle={cpu_times.idle}s")
+    # print(f"Núcleos: {qtd_cpu_fisica} físicos | {qtd_cpu_logica} lógicos")
+    # print(f"Uso por núcleo: {cpu_por_nucleo}")
+    # print(f"Frequência CPU: {freq_cpu.current:.2f} MHz" if freq_cpu else "Frequência: N/A")
+    # print(f"Tempos de CPU: User={cpu_times.user}s, System={cpu_times.system}s, Idle={cpu_times.idle}s")
         
     print(f"\nProcessos Totais: {total_processos} (Rodando: {proc_rodando} | Esperando: {proc_esperando})")
     # print(f"Threads Totais: {threads_totais}")
