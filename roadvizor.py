@@ -9,7 +9,7 @@ MAX_NUCLEOS = 16
 
 def titulo():
         title = ["id_maquina","timestamp", "cpu",
-    "ram_total","ram_uso","swap_total","swap_uso","proc_rodando","proc_esperando", "disco_total","disco_uso", 
+    "ram_total","ram_uso","swap_total","swap_uso","proc_rodando","proc_esperando", "disco_total","disco_uso",
     "rede_enviada", "rede_recebida","pacote_perdido_entrada","pacote_perdido_saida","latencia"]
         with open('./roadvizor.csv', 'a', newline='') as csvfile:
             writer = csv.writer(csvfile,delimiter=';')
@@ -24,35 +24,35 @@ def monitorar_sistema() :
     # qtd_cpu_logica = psutil.cpu_count(logical=True)
     # freq_cpu = psutil.cpu_freq()
 
-    # discretização 
-    if porcentagem_cpu <= 50: 
+    # discretização
+    if porcentagem_cpu <= 50:
         status_cpu = "Normal"
     elif porcentagem_cpu <= 80:
         status_cpu = "Atenção"
-    else : 
+    else :
         status_cpu = "Crítico"
 
-    # processos e threads 
+    # processos e threads
     processos = list(psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_info', 'status'])) # todos os processos em execução
     total_processos = len(processos)
     # threads_totais = sum(p.num_threads() for p in processos if hasattr(p, "num_threads")) # soma o numero total de threads de todos os processos
 
-    proc_rodando = sum(1 for p in processos if p.info['status'] == psutil.STATUS_RUNNING) # p.info é um dicionario da psutil e esta pegando o valor da chave status 
+    proc_rodando = sum(1 for p in processos if p.info['status'] == psutil.STATUS_RUNNING) # p.info é um dicionario da psutil e esta pegando o valor da chave status
     proc_esperando = sum(1 for p in processos if p.info['status'] == psutil.STATUS_SLEEPING)
 
-    # processo por uso de CPU e memoria 
-    top_cpu = max(processos, key=lambda p: p.info['cpu_percent'] or 0) # lambda é uma função anonima entao vc coloca argumento e expressao depois 
+    # processo por uso de CPU e memoria
+    top_cpu = max(processos, key=lambda p: p.info['cpu_percent'] or 0) # lambda é uma função anonima entao vc coloca argumento e expressao depois
     top_ram = max(processos, key=lambda p: p.info['memory_info'].rss if p.info['memory_info'] else 0) # se tiver dados de memoria validos usa a info do rss (quant exata de ram fisica que o processo esta utilizando )
 
     # memoria (ram e swap)
     ram = psutil.virtual_memory()
     swap = psutil.swap_memory()
 
-    # disco 
+    # disco
     uso_disco = psutil.disk_usage('/')
     io_disco = psutil.disk_io_counters()
 
-    # rede 
+    # rede
     io_rede = psutil.net_io_counters()
     conexoes_ativas = len(psutil.net_connections(kind='inet'))
     st = speedtest.Speedtest()
@@ -80,7 +80,7 @@ def monitorar_sistema() :
     # print(f"Uso por núcleo: {cpu_por_nucleo}")
     # print(f"Frequência CPU: {freq_cpu.current:.2f} MHz" if freq_cpu else "Frequência: N/A")
     # print(f"Tempos de CPU: User={cpu_times.user}s, System={cpu_times.system}s, Idle={cpu_times.idle}s")
-        
+       
     print(f"\nProcessos Totais: {total_processos} (Rodando: {proc_rodando} | Esperando: {proc_esperando})")
     # print(f"Threads Totais: {threads_totais}")
     print(f"Maior uso de CPU: {top_cpu.info['name']} ({top_cpu.info['cpu_percent']}%)")
@@ -106,7 +106,7 @@ def monitorar_sistema() :
 
     time.sleep(2)
 
-titulo()   
+titulo()  
 
 for i in range(10):
     monitorar_sistema()
