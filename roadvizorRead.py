@@ -55,14 +55,15 @@ for mac, maquina in df.groupby("id_maquina"):
         discMaior = disco_media
         nomeDisc = mac
 
-print(f"""
-    ===============================
-        Máquina: {mac}
-        CPU: {cpu_max:.2f}%
-        RAM: {ram_media:.2f}%
-        Disco: {disco_media:.2f}%
-    ===============================
-""")
+    print(f"""
+        ===============================
+            Máquina: {mac}
+            CPU: {cpu_max:.2f}%
+            RAM: {ram_media:.2f}%
+            Disco: {disco_media:.2f}%
+            Data: {fim}
+        ===============================
+    """)
 
 print(f"""
     ==============================================

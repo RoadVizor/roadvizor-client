@@ -74,31 +74,31 @@ def monitorar_sistema() :
 
     mensagem.append([id_maquina,hora, porcentagem_cpu,ram.total, ram.used, swap.total,swap.used,proc_rodando,proc_esperando,uso_disco.total, uso_disco.used,io_rede.bytes_sent,io_rede.bytes_recv,io_rede.dropin,io_rede.dropout,latencia])
 
-    print(f"=== MONITORAMENTO - {datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} ===")
-    print(f"Status da CPU: {status_cpu} ({porcentagem_cpu}%)")
-    # print(f"Núcleos: {qtd_cpu_fisica} físicos | {qtd_cpu_logica} lógicos")
-    # print(f"Uso por núcleo: {cpu_por_nucleo}")
-    # print(f"Frequência CPU: {freq_cpu.current:.2f} MHz" if freq_cpu else "Frequência: N/A")
-    # print(f"Tempos de CPU: User={cpu_times.user}s, System={cpu_times.system}s, Idle={cpu_times.idle}s")
+    print(f"=== REALIZANDO MONITORAMENTO DA MÁQUINA {id_maquina} - {datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} ===")
+    # print(f"Status da CPU: {status_cpu} ({porcentagem_cpu}%)")
+    # # print(f"Núcleos: {qtd_cpu_fisica} físicos | {qtd_cpu_logica} lógicos")
+    # # print(f"Uso por núcleo: {cpu_por_nucleo}")
+    # # print(f"Frequência CPU: {freq_cpu.current:.2f} MHz" if freq_cpu else "Frequência: N/A")
+    # # print(f"Tempos de CPU: User={cpu_times.user}s, System={cpu_times.system}s, Idle={cpu_times.idle}s")
        
-    print(f"\nProcessos Totais: {total_processos} (Rodando: {proc_rodando} | Esperando: {proc_esperando})")
-    # print(f"Threads Totais: {threads_totais}")
-    print(f"Maior uso de CPU: {top_cpu.info['name']} ({top_cpu.info['cpu_percent']}%)")
-    print(f"Maior uso de RAM: {top_ram.info['name']} ({top_ram.info['memory_info'].rss / (1024**2):.2f} MB)") # converte bytes em mb
+    # print(f"\nProcessos Totais: {total_processos} (Rodando: {proc_rodando} | Esperando: {proc_esperando})")
+    # # print(f"Threads Totais: {threads_totais}")
+    # print(f"Maior uso de CPU: {top_cpu.info['name']} ({top_cpu.info['cpu_percent']}%)")
+    # print(f"Maior uso de RAM: {top_ram.info['name']} ({top_ram.info['memory_info'].rss / (1024**2):.2f} MB)") # converte bytes em mb
 
-    print(f"\nRAM Total: {ram.total / (1024**3):.2f} GB") # converte bytes em gb
-    print(f"RAM Usada: {ram.percent}% | Livre: {ram.free / (1024**3):.2f} GB | Disponível: {ram.available / (1024**3):.2f} GB")
-    print(f"SWAP Total: {swap.total / (1024**3):.2f} GB | Usado: {swap.percent}%")
+    # print(f"\nRAM Total: {ram.total / (1024**3):.2f} GB") # converte bytes em gb
+    # print(f"RAM Usada: {ram.percent}% | Livre: {ram.free / (1024**3):.2f} GB | Disponível: {ram.available / (1024**3):.2f} GB")
+    # print(f"SWAP Total: {swap.total / (1024**3):.2f} GB | Usado: {swap.percent}%")
 
-    print(f"\nDisco Total: {uso_disco.total / (1024**3):.2f} GB")
-    print(f"Disco Usado: {uso_disco.percent}% | Livre: {uso_disco.free / (1024**3):.2f} GB")
-    print(f"Leitura Disco: {io_disco.read_bytes / (1024**2):.2f} MB | Escrita: {io_disco.write_bytes / (1024**2):.2f} MB")
-    print(f"Tempo de IO: Leitura {io_disco.read_time}ms | Escrita {io_disco.write_time}ms")
+    # print(f"\nDisco Total: {uso_disco.total / (1024**3):.2f} GB")
+    # print(f"Disco Usado: {uso_disco.percent}% | Livre: {uso_disco.free / (1024**3):.2f} GB")
+    # print(f"Leitura Disco: {io_disco.read_bytes / (1024**2):.2f} MB | Escrita: {io_disco.write_bytes / (1024**2):.2f} MB")
+    # print(f"Tempo de IO: Leitura {io_disco.read_time}ms | Escrita {io_disco.write_time}ms")
 
-    print(f"\nRede Enviada: {io_rede.bytes_sent / (1024**2):.2f} MB | Recebida: {io_rede.bytes_recv / (1024**2):.2f} MB")
-    print(f"Pacotes Descartados: Entrada {io_rede.dropin} | Saída {io_rede.dropout}")
-    print(f"Erros de Rede: Entrada {io_rede.errin} | Saída {io_rede.errout}")
-    print(f"Conexões Ativas: {conexoes_ativas}")
+    # print(f"\nRede Enviada: {io_rede.bytes_sent / (1024**2):.2f} MB | Recebida: {io_rede.bytes_recv / (1024**2):.2f} MB")
+    # print(f"Pacotes Descartados: Entrada {io_rede.dropin} | Saída {io_rede.dropout}")
+    # print(f"Erros de Rede: Entrada {io_rede.errin} | Saída {io_rede.errout}")
+    # print(f"Conexões Ativas: {conexoes_ativas}")
 
     with open('./roadvizor.csv', 'a', newline='') as csvfile:
         writer = csv.writer(csvfile, delimiter=';')
