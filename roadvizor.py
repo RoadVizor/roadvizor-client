@@ -7,14 +7,23 @@ from getmac import get_mac_address
 
 MAX_NUCLEOS = 16
 
+dadosCSV = 'roadvizor.csv'
+qtd = 10
+
 def titulo():
-        title = ["id_maquina","timestamp", "cpu",
-    "ram_total","ram_uso","swap_total","swap_uso","proc_rodando","proc_esperando", "disco_total","disco_uso",
-    "rede_enviada", "rede_recebida","pacote_perdido_entrada","pacote_perdido_saida","latencia"]
+    try:
+        with open(dadosCSV, "r", encoding="utf-8") as f:
+            print(f"O arquivo '{dadosCSV}' encontrado e aberto com sucesso. Iniciando leituras")
+    except FileNotFoundError:
+        print("Criando arquivo 'roadvizor.csv' e iniciando leituras")
+        title = ["id_maquina","timestamp", "cpu","ram_total","ram_uso","swap_total","swap_uso","proc_rodando","proc_esperando", "disco_total","disco_uso","rede_enviada", "rede_recebida","pacote_perdido_entrada","pacote_perdido_saida","latencia"]
         with open('./roadvizor.csv', 'a', newline='') as csvfile:
             writer = csv.writer(csvfile,delimiter=';')
             writer.writerow(title)
-
+    finally:
+        for i in range(qtd):
+            monitorar_sistema()
+        
 def monitorar_sistema() :
     # CPU
     porcentagem_cpu = psutil.cpu_percent(interval=1)
@@ -107,6 +116,3 @@ def monitorar_sistema() :
     time.sleep(2)
 
 titulo()  
-
-for i in range(10):
-    monitorar_sistema()
