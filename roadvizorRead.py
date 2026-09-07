@@ -3,10 +3,12 @@ import pandas as pd
 cpuMaior = 0
 ramMaior = 0
 discMaior = 0
+latenciaMaior = 0
 
 nomeCPU = ""
 nomeRAM = ""
 nomeDisc = ""
+nomeLatencia = ""
 
 df = pd.read_csv("roadvizor.csv", sep=";")
 
@@ -32,6 +34,11 @@ for mac, maquina in df.groupby("id_maquina"):
     disco = maquina[
         maquina["timestamp"] >= fim - pd.Timedelta(minutes=30)
     ]
+    
+    
+    latencia = maquina[
+        maquina["timestamp"] >= fim - pd.Timedelta(minutes=60)
+    ]
 
     ram_media = (
         ram["ram_uso"] / ram["ram_total"] * 100
@@ -42,6 +49,10 @@ for mac, maquina in df.groupby("id_maquina"):
     disco_media = (
         disco["disco_uso"] / disco["disco_total"] * 100
     ).mean()
+
+    latencia_media = latencia["latencia"].mean()
+
+    
 
     if cpu_max > cpuMaior:
         cpuMaior = cpu_max
@@ -55,12 +66,23 @@ for mac, maquina in df.groupby("id_maquina"):
         discMaior = disco_media
         nomeDisc = mac
 
-    print(f"""
+
+    if latencia_media > latenciaMaior:
+        latenciaMaior = latencia_media
+        nomeLatencia = mac
+
+    
+
+    
+
+
+print(f"""
         ===============================
             Máquina: {mac}
             CPU: {cpu_max:.2f}%
             RAM: {ram_media:.2f}%
             Disco: {disco_media:.2f}%
+            Latencia: {latencia_media:.2f}
             Data: {fim}
         ===============================
     """)
@@ -71,5 +93,6 @@ print(f"""
         Máquina com maior uso da CPU: {nomeCPU}    
         Máquina com maior uso da RAM: {nomeRAM}    
         Máquina com maior uso do disco: {nomeDisc} 
+        Máquina com maior uso da Rede: {nomeLatencia}
     ==============================================
 """)
