@@ -10,7 +10,7 @@ O **RoadVizor** é uma solução para captura, higienização, enriquecimento e 
 [Servidor de Borda] ➔ [S3 Bucket Bronze] ➔ [ETL Silver] ➔ [S3 Bucket Silver] ➔ [ETL Gold + MySQL] ➔ [S3 Bucket Gold (JSON)]
 ```
 
-### 🖼️ Diagrama da Arquitetura
+### 🖼️ Diagrama da Arquitetura 
 
 ![Diagrama da Arquitetura RoadVizor](img/arquitetura.png)
 *> **Nota:** Substitua o caminho acima pela imagem do diagrama de arquitetura ou fluxo do projeto.*
