@@ -1,6 +1,6 @@
 # 🛣️ RoadVizor — Monitoramento e Pipeline de Dados em Arquitetura Medallion
 
-O **RoadVizor** é uma solução para captura, higienização, enriquecimento e análise de dados de telemetria de servidores implantados em infraestruturas rodoviárias. O sistema utiliza a **Arquitetura Medallion** (*Bronze, Silver e Gold*) sobre o **Amazon S3**, integrada a um banco de dados **MySQL** para gestão de inventário, regras de alerta e localização geográfica dos servidores.
+O **RoadVizor** é uma solução para captura, higienização, enriquecimento e análise de dados de telemetria de servidores implantados em infraestruturas rodoviárias (Servidores Free Flow). O sistema utiliza a **Arquitetura Medallion** (*Bronze, Silver e Gold*) sobre o **Amazon S3**, integrada a um banco de dados **MySQL** para gestão de inventário, regras de alerta e localização geográfica dos servidores.
 
 ---
 
@@ -13,7 +13,6 @@ O **RoadVizor** é uma solução para captura, higienização, enriquecimento e 
 ### 🖼️ Diagrama da Arquitetura 
 
 ![Diagrama da Arquitetura RoadVizor](img/arquitetura.png)
-*> **Nota:** Substitua o caminho acima pela imagem do diagrama de arquitetura ou fluxo do projeto.*
 
 ---
 
