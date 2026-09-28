@@ -1,0 +1,17 @@
+# 🛣️ RoadVizor — Pipeline de Dados e Monitorização
+
+O repositório do **RoadVizor** contém a infraestrutura completa para a captura, limpeza e enriquecimento de dados de telemetria de servidores de rodovias. O fluxo de processamento utiliza a arquitetura Medallion (Bronze, Silver e Gold) na plataforma AWS (Amazon S3), apoiado por uma base de dados MySQL para gestão de metadados e regras de alerta.
+
+---
+
+## 📋 1. Pré-requisitos & Dependências (`requirements.txt`)
+
+Para rodar os scripts da pipeline (`clientRoadvizor.py`, `etl_silver.py` e `etl_gold.py`), crie o arquivo `requirements.txt` na raiz do seu projeto com o seguinte conteúdo:
+
+```text
+boto3
+pandas
+mysql-connector-python
+psutil
+speedtest-cli
+getmac
