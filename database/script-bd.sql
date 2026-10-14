@@ -45,10 +45,9 @@ CREATE TABLE IF NOT EXISTS empresa(
     razao_social VARCHAR(120) NOT NULL,
     nome_fantasia VARCHAR(120) NOT NULL,
     email VARCHAR(255) NOT NULL UNIQUE,		-- campo usado para contato
-    
     domain_jira VARCHAR(255) NOT NULL UNIQUE,
     email_jira VARCHAR(255) NOT NULL UNIQUE,
-    api_token_jira VARCHAR(255) NOT NULL UNIQUE,
+	api_token_jira VARCHAR(255) NOT NULL UNIQUE,
     project_key VARCHAR(255) NOT NULL UNIQUE,
     
     criado_em DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -96,54 +95,97 @@ CREATE TABLE IF NOT EXISTS servidor(
 		REFERENCES endereco(id_endereco)
 );
 
-CREATE TABLE IF NOT EXISTS componente(
-	id_componente INT PRIMARY KEY AUTO_INCREMENT,
-    
-    nome VARCHAR(60) NOT NULL,
+CREATE TABLE componente (
+    id_componente INT AUTO_INCREMENT PRIMARY KEY,
+    nome VARCHAR(60) NOT NULL UNIQUE,
     unidade_medida VARCHAR(20) NOT NULL,
-    depende_de VARCHAR(60) NOT NULL,		-- informa a biblioteca e o método cuja captura depende; ex: <lib>.<metodo>(<argumentos...>)
-    
+    depende_de VARCHAR(120) NOT NULL,
+
     criado_em DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    atualizado_em DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    
-    CONSTRAINT chk_componente_nome CHECK(nome IN('cpu', 'ram', 'disco', 'placa_rede')),
-    CONSTRAINT chk_componente_unidade_medida CHECK(unidade_medida IN(
-		'pct',					-- percentual (%) | CPU
-        'MiB', 'GiB', 'TiB',	-- armazenamento  | RAM, Disco
-        'bps', 'Mbps', 'Gbps'	-- velocidade de transferência | I/O de Rede
-    ))
+    atualizado_em DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT chk_componente_nome
+        CHECK (
+            nome IN ('cpu', 'ram', 'disco', 'placa_rede')
+        ),
+
+    CONSTRAINT chk_componente_unidade
+        CHECK (
+            (nome = 'cpu' AND unidade_medida = 'pct')
+            OR
+            (nome = 'ram' AND unidade_medida IN ('MiB', 'GiB', 'TiB'))
+            OR
+            (nome = 'disco' AND unidade_medida IN ('MiB', 'GiB', 'TiB'))
+            OR
+            (nome = 'placa_rede' AND unidade_medida IN ('Mbps', 'Gbps'))
+        )
 );
 
-CREATE TABLE IF NOT EXISTS servidor_componente(
-	servidor_id INT NOT NULL,
+CREATE TABLE servidor_componente (
+    servidor_id INT NOT NULL,
     empresa_id INT NOT NULL,
     componente_id INT NOT NULL,
-    
-    -- assumindo que 'limite_max', 'limite_min' e 'capacidade_total'
-    -- serão medidos com a mesma unidade de medida definida no componente.
-    limite_max DECIMAL(10, 3) NOT NULL,
-    limite_min DECIMAL(10, 3) NULL,
-    capacidade_total DECIMAL(10, 3) NOT NULL,
-    monitorado TINYINT NOT NULL DEFAULT 1,	-- 0 deixou de ser monitorado | 1 está sendo monitorado
-    
+
+    limite_max DECIMAL(12, 3) NOT NULL,
+    limite_min DECIMAL(12, 3) NULL,
+    capacidade_total DECIMAL(12, 3) NOT NULL,
+
+    monitorado TINYINT NOT NULL DEFAULT 1,
+
     criado_em DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    atualizado_em DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    atualizado_em DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT pk_servidor_componente
+        PRIMARY KEY (servidor_id, empresa_id, componente_id),
+
+    CONSTRAINT fk_servidor_componente_servidor
+        FOREIGN KEY (servidor_id, empresa_id)
+        REFERENCES servidor (id_servidor, empresa_id),
+
+    CONSTRAINT fk_servidor_componente_componente
+        FOREIGN KEY (componente_id)
+        REFERENCES componente (id_componente),
+
+    CONSTRAINT chk_servidor_componente_monitorado
+        CHECK (monitorado IN (0, 1)),
+
+    CONSTRAINT chk_servidor_componente_limites
+        CHECK (
+            limite_max >= 0
+            AND capacidade_total >= 0
+            AND (limite_min IS NULL OR limite_min >= 0)
+            AND (limite_min IS NULL OR limite_min <= limite_max)
+            AND limite_max <= capacidade_total
+        )
+);
+
+ CREATE TABLE `log`(
+	log_id INT NOT NULL AUTO_INCREMENT,
+	servidor_id INT NOT NULL,
+    titulo VARCHAR(255),
+    descricao VARCHAR(255),
+	`status` VARCHAR(45),
     
-    CONSTRAINT pk_servidor_componente PRIMARY KEY(servidor_id, empresa_id, componente_id),
-    CONSTRAINT fk_servidor_componente_servidor FOREIGN KEY (servidor_id, empresa_id)
-		REFERENCES servidor(id_servidor, empresa_id),
-	CONSTRAINT fk_servidor_componente_componente FOREIGN KEY (componente_id)
-		REFERENCES componente(id_componente)
+    PRIMARY KEY(log_id, servidor_id),
+    CONSTRAINT fk_log_servidor FOREIGN KEY (servidor_id)
+		REFERENCES servidor(id_servidor)
 );
 
 -- | Stored Procedure(s) | --
+
 DELIMITER $$
 CREATE PROCEDURE sp_cadastrar_empresa(
 	IN in_cnpj CHAR(14),
     IN in_razao_social VARCHAR(120),
     IN in_nome_fantasia VARCHAR(120),
     IN in_email VARCHAR(255),
-    IN in_senha VARCHAR(255)
+    IN in_senha VARCHAR(255),    
+    IN in_domain_jira VARCHAR(255),
+    IN in_email_jira VARCHAR(255),
+    IN in_api_token_jira VARCHAR(255),
+    In in_project_key VARCHAR(255)
 ) BEGIN
 
 	-- Tratamento de Erro na Procedure
@@ -156,8 +198,8 @@ CREATE PROCEDURE sp_cadastrar_empresa(
 	-- Corpo da Procedure
 	START TRANSACTION;
 		-- 1. Criar Empresa
-		INSERT INTO empresa(cnpj, razao_social, nome_fantasia, email)
-			VALUES (in_cnpj, in_razao_social, in_nome_fantasia, in_email);
+		INSERT INTO empresa(cnpj, razao_social, nome_fantasia, email, domain_jira, email_jira, api_token_jira, project_key)
+			VALUES (in_cnpj, in_razao_social, in_nome_fantasia, in_email, in_domain_jira, in_email_jira, in_api_token_jira, in_project_key);
 			
 		-- 2. Criar Usuário ADM da Empresa criada
 		INSERT INTO usuario(empresa_id, nome, email, senha, nivel_acesso)
@@ -167,82 +209,18 @@ CREATE PROCEDURE sp_cadastrar_empresa(
 END$$
 DELIMITER ;
 
-
 -- | Inserts-padrão | --
-INSERT INTO componente(nome, unidade_medida, depende_de)
-	VALUES ('cpu', 'pct', 'psutil.cpu_percent()'),
-    ('ram', 'MiB', 'psutil.virtual_memory()'),
+INSERT INTO componente (nome, unidade_medida, depende_de)
+VALUES
+    ('cpu', 'pct', 'psutil.cpu_percent(interval=1)'),
+    ('ram', 'GiB', 'psutil.virtual_memory()'),
     ('disco', 'GiB', 'psutil.disk_usage("/")'),
-    ('placa_rede', 'Mbps', 'psutil.net_if_stats()');
+    ('placa_rede', 'Mbps', 'psutil.net_io_counters()');
     
+CALL roadvizor.sp_cadastrar_empresa("0000000/200-1", "Roadvizor", "Roadvizor", "admin@adm.com", "Dado1807#", "b", "b", "b", "b");
+UPDATE roadvizor.usuario SET nivel_acesso = 0, email = "adm@adm.com", senha = SHA2("Dado1807#", 256) WHERE id_usuario = 1;
 
 -- [!] Rodar scripts abaixo APENAS com o root do BD.
 -- CREATE USER 'roadvizor_user' IDENTIFIED BY 'sptech';
 -- GRANT INSERT, SELECT, UPDATE, DELETE ON roadvizor.* TO 'roadvizor_user';
 -- SHOW GRANTS FOR 'roadvizor_user';
-
--- 1. Cadastra a Empresa (necessária para vincular ao servidor)
-INSERT INTO empresa (id_empresa, cnpj, razao_social, nome_fantasia, email, domain_jira, email_jira, api_token_jira, project_key)
-VALUES (
-    1, 
-    '12345678000199', 
-    'Concessionaria Rodovias SpTech S.A.', 
-    'SpTech FreeFlow', 
-    'operacoes@sptech.com.br',
-    'https://sptech-team-j3dwrfgb.atlassian.net',
-    'ancelmo.ssousa@sptech.school',
-    'ATATT3xFfGF0zocbTvWujUOSXfuwBCucAKR41eaiWPdPcED9jPucuusg6WIdtkTYCSirYefyL6jEA4kz75sO_lIqCH6_-VB9rwhXdDZGFVXJGGpi89mi2ZSIDFUIUQWKaOS3QnwAeDTUjXS9GbOUKETT6iOlu1vy4G6JQDcPclBF0ipj84cf6kQ=6FC11B33',
-    'MG0'
-);
-
-
--- 2. Cadastra o Servidor com o seu Endereço MAC (6C946647CDD1)
--- Usa empresa_id = 1 e endereco_id = 1 (criado no seu script DDL)
-INSERT INTO servidor (id_servidor, empresa_id, endereco_id, endereco_mac, apelido, modelo)
-VALUES (
-    1, 
-    1, 
-    1, 
-    '6C946647CDD1', 
-    'Servidor FreeFlow Edge Km 15', 
-    'PADR-S501-I980'
-);
-
--- 3. Configura os limites e o monitoramento para o seu Servidor
--- Respeita os nomes/unidades cadastrados na tabela 'componente' (pct, MiB, GiB, Mbps)
-INSERT INTO servidor_componente (servidor_id, empresa_id, componente_id, limite_max, limite_min, capacidade_total, monitorado)
-VALUES 
--- Componente 1: 'cpu' (unidade: 'pct') -> Alerta se passar de 80%
-(1, 1, 1, 80.000, 0.000, 100.000, 1),
-
--- Componente 2: 'ram' (unidade: 'MiB') -> Capacidade 16384 MiB (16 GB), Alerta acima de 14336 MiB (14 GB)
-(1, 1, 2, 14336.000, 0.000, 16384.000, 1),
-
--- Componente 3: 'disco' (unidade: 'GiB') -> Capacidade 256 GiB, Alerta acima de 200 GiB
-(1, 1, 3, 200.000, 0.000, 256.000, 1),
-
--- Componente 4: 'placa_rede' (unidade: 'Mbps') -> Alerta acima de 100 Mbps
-(1, 1, 4, 100.000, 0.000, 1000.000, 1);
-
-
-
-SELECT 
-    e.id_empresa,
-    e.razao_social,
-    e.nome_fantasia,
-    s.id_servidor,
-    s.apelido
-FROM servidor s
-JOIN empresa e ON s.empresa_id = e.id_empresa
-WHERE s.endereco_mac = "6C946647CDD1";
-
-SELECT 
-    e.domain_jira,
-    e.email_jira,
-    e.api_token_jira,
-    e.project_key
-FROM servidor s
-JOIN empresa e ON s.empresa_id = e.id_empresa
-WHERE s.endereco_mac = "6C946647CDD1";
-
-SELECT * FROM empresa;
