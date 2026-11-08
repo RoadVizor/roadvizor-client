@@ -1,8 +1,8 @@
+import json
+from io import BytesIO
+
 import boto3
 import pandas as pd
-
-from io import BytesIO
-from datetime import datetime
 from botocore.exceptions import ClientError, NoCredentialsError
 
 
@@ -13,6 +13,47 @@ BUCKET_SILVER = "datalake-silver-roadvizor-sptech"
 
 PREFIXO_BRONZE = "raw/"
 PREFIXO_SILVER = "trusted/"
+
+# O clientV02 grava o CSV com ";" (constante SEPARADOR_CSV no client).
+SEPARADOR_BRONZE = ";"
+# Mesmo padrão do Bronze, compatível com a leitura atual da Gold.
+SEPARADOR_SILVER = ";"
+
+# Colunas que o clientV02 SEMPRE grava, independente dos componentes da API.
+COLUNAS_FIXAS = [
+    "timestamp",
+    "mac",
+    "hostname",
+    "so_sistema",
+    "arquitetura",
+    "cpu_fisicos",
+    "cpu_logicos",
+    "tipo_dia",
+    "feriado",
+    "processos",
+]
+
+# Colunas de texto que nunca devem ser convertidas para número.
+COLUNAS_TEXTO = [
+    "timestamp",
+    "mac",
+    "hostname",
+    "so_sistema",
+    "arquitetura",
+    "tipo_dia",
+    "feriado",
+    "processos",
+]
+
+TIPOS_DIA_VALIDOS = {"DIA_UTIL", "FIM_DE_SEMANA", "FERIADO"}
+
+# As colunas dos componentes são dinâmicas (dependem do campo "nome" cadastrado
+# na tabela componente). Regras genéricas aplicadas na Silver:
+#   - toda coluna terminada em "_percent" (ram, disco, swap...) fica entre 0 e 100;
+#   - componentes que retornam um número simples (ex.: CPU) viram uma coluna só
+#     com o nome do componente. Liste aqui o nome já sanitizado desses componentes
+#     (minúsculo, sem acento, com "_") para validar 0-100 também.
+COLUNAS_PERCENTUAIS_SIMPLES = ["cpu"]
 
 s3 = boto3.client("s3", region_name=REGIAO_AWS)
 
@@ -63,8 +104,11 @@ def ler_csv_bronze(chave):
 
     df = pd.read_csv(
         BytesIO(conteudo),
-        sep=";",
-        encoding="utf-8"
+        sep=SEPARADOR_BRONZE,
+        encoding="utf-8",
+        # MAC como texto: sem isso, um MAC só com dígitos (ou com "E" no meio)
+        # seria lido como número e perderia zeros à esquerda.
+        dtype={"mac": str}
     )
 
     print(f"Arquivo lido: {chave}")
@@ -74,37 +118,11 @@ def ler_csv_bronze(chave):
 
 
 def validar_colunas(df):
-    """Verifica se o CSV possui as colunas necessárias."""
-
-    colunas_obrigatorias = [
-        "cod_maquina",
-        "timestamp",
-        "tipo_dia",
-        "fluxo_veiculos_sim",
-        "cpu_pct",
-        "cpu_simulada_pct",
-        "ram_total_gib",
-        "ram_uso_gib",
-        "ram_disponivel_gib",
-        "ram_pct",
-        "swap_total_gib",
-        "swap_uso_gib",
-        "swap_pct",
-        "disco_total_gib",
-        "disco_uso_gib",
-        "disco_livre_gib",
-        "disco_pct",
-        "proc_totais",
-        "proc_rodando",
-        "rede_recebida_mb",
-        "rede_enviada_mb",
-        "latencia_ms",
-        "uptime_segundos"
-    ]
+    """Verifica se o CSV possui as colunas fixas do client."""
 
     colunas_ausentes = [
         coluna
-        for coluna in colunas_obrigatorias
+        for coluna in COLUNAS_FIXAS
         if coluna not in df.columns
     ]
 
@@ -114,35 +132,15 @@ def validar_colunas(df):
             + ", ".join(colunas_ausentes)
         )
 
+    colunas_componentes = [
+        coluna
+        for coluna in df.columns
+        if coluna not in COLUNAS_FIXAS
+    ]
 
-def padronizar_unidades(df):
-    """Padroniza unidades sem converter valores duas vezes."""
-
-    conversoes = {
-        "ram_total_bytes": ("ram_total_gib", 1024 ** 3),
-        "ram_uso_bytes": ("ram_uso_gib", 1024 ** 3),
-        "ram_disponivel_bytes": ("ram_disponivel_gib", 1024 ** 3),
-        "swap_total_bytes": ("swap_total_gib", 1024 ** 3),
-        "swap_uso_bytes": ("swap_uso_gib", 1024 ** 3),
-        "disco_total_bytes": ("disco_total_gib", 1024 ** 3),
-        "disco_uso_bytes": ("disco_uso_gib", 1024 ** 3),
-        "disco_livre_bytes": ("disco_livre_gib", 1024 ** 3),
-        "rede_recebida_bytes": ("rede_recebida_mib", 1024 ** 2),
-        "rede_enviada_bytes": ("rede_enviada_mib", 1024 ** 2),
-        "disco_leitura_bytes": ("disco_leitura_mib", 1024 ** 2),
-        "disco_escrita_bytes": ("disco_escrita_mib", 1024 ** 2)
-    }
-
-    for coluna_origem, dados in conversoes.items():
-        coluna_destino, divisor = dados
-
-        if coluna_origem in df.columns:
-            if coluna_destino not in df.columns:
-                df[coluna_destino] = df[coluna_origem] / divisor
-
-            df.drop(columns=[coluna_origem], inplace=True)
-
-    return df
+    print(
+        f"Colunas de componentes encontradas: {len(colunas_componentes)}"
+    )
 
 
 def tratar_tipos_dados(df):
@@ -150,52 +148,55 @@ def tratar_tipos_dados(df):
 
     df["timestamp"] = pd.to_datetime(
         df["timestamp"],
-        errors="coerce",
-        dayfirst=True
+        format="%Y-%m-%d %H:%M:%S",
+        errors="coerce"
     )
 
-    colunas_numericas = [
-        "fluxo_veiculos_sim",
-        "cpu_pct",
-        "cpu_simulada_pct",
-        "cpu_freq_mhz",
-        "cpu_nucleos_fisicos",
-        "cpu_nucleos_logicos",
-        "ram_total_gib",
-        "ram_uso_gib",
-        "ram_disponivel_gib",
-        "ram_pct",
-        "swap_total_gib",
-        "swap_uso_gib",
-        "swap_pct",
-        "disco_total_gib",
-        "disco_uso_gib",
-        "disco_livre_gib",
-        "disco_pct",
-        "disco_leitura_mb",
-        "disco_escrita_mb",
-        "proc_totais",
-        "proc_rodando",
-        "proc_cpu_top_pid",
-        "proc_cpu_top_pct",
-        "proc_cpu_top_threads",
-        "proc_ram_top_pid",
-        "proc_ram_top_mb",
-        "proc_ram_top_pct",
-        "rede_recebida_mb",
-        "rede_enviada_mb",
-        "latencia_ms",
-        "uptime_segundos"
-    ]
+    df["mac"] = df["mac"].astype("string").str.strip().str.upper()
+    df["tipo_dia"] = (
+        df["tipo_dia"].astype("string").str.strip().str.upper()
+    )
+    df["feriado"] = df["feriado"].astype("string").fillna("")
 
-    for coluna in colunas_numericas:
-        if coluna in df.columns:
-            df[coluna] = pd.to_numeric(
-                df[coluna],
-                errors="coerce"
-            )
+    # Colunas dinâmicas lidas como texto: converte para número quando TODOS
+    # os valores preenchidos forem numéricos (ex.: duplex/flags continuam texto).
+    for coluna in df.columns:
+        if coluna in COLUNAS_TEXTO:
+            continue
+
+        serie = df[coluna]
+
+        if pd.api.types.is_numeric_dtype(serie) or pd.api.types.is_bool_dtype(serie):
+            continue
+
+        convertida = pd.to_numeric(serie, errors="coerce")
+
+        if convertida.notna().sum() == serie.notna().sum():
+            df[coluna] = convertida
 
     return df
+
+
+def colunas_percentuais(df):
+    """Retorna as colunas numéricas que representam percentual de uso."""
+
+    candidatas = [
+        coluna
+        for coluna in df.columns
+        if coluna.endswith("_percent")
+    ]
+
+    candidatas += [
+        coluna
+        for coluna in COLUNAS_PERCENTUAIS_SIMPLES
+        if coluna in df.columns and coluna not in candidatas
+    ]
+
+    return [
+        coluna
+        for coluna in candidatas
+        if pd.api.types.is_numeric_dtype(df[coluna])
+    ]
 
 
 def remover_registros_invalidos(df):
@@ -203,65 +204,40 @@ def remover_registros_invalidos(df):
 
     quantidade_inicial = len(df)
 
-    colunas_essenciais = [
-        "cod_maquina",
-        "timestamp",
-        "tipo_dia",
-        "cpu_pct",
-        "cpu_simulada_pct",
-        "ram_total_gib",
-        "ram_uso_gib",
-        "ram_pct",
-        "disco_total_gib",
-        "disco_uso_gib",
-        "latencia_ms"
-    ]
+    # Campos essenciais sempre presentes
+    df = df.dropna(subset=["timestamp", "mac", "tipo_dia"]).copy()
+    df = df[df["tipo_dia"].isin(TIPOS_DIA_VALIDOS)].copy()
 
-    df = df.dropna(subset=colunas_essenciais).copy()
+    # Percentuais entre 0 e 100 (valores vazios são mantidos)
+    for coluna in colunas_percentuais(df):
+        df = df[df[coluna].isna() | df[coluna].between(0, 100)].copy()
 
-    df = df[
-        (df["cpu_pct"].between(0, 100))
-        & (df["cpu_simulada_pct"].between(0, 100))
-        & (df["ram_total_gib"] >= 0)
-        & (df["ram_uso_gib"] >= 0)
-        & (df["ram_uso_gib"] <= df["ram_total_gib"])
-        & (df["ram_pct"].between(0, 100))
-        & (df["disco_total_gib"] >= 0)
-        & (df["disco_uso_gib"] >= 0)
-        & (df["disco_uso_gib"] <= df["disco_total_gib"])
-        & (df["latencia_ms"] >= 0)
-    ].copy()
+    # Nenhuma métrica numérica coletada pode ser negativa
+    colunas_numericas = df.select_dtypes(include="number").columns
 
-    colunas_nao_negativas = [
-        "fluxo_veiculos_sim",
-        "ram_disponivel_gib",
-        "swap_total_gib",
-        "swap_uso_gib",
-        "swap_pct",
-        "disco_livre_gib",
-        "disco_pct",
-        "disco_leitura_mb",
-        "disco_escrita_mb",
-        "proc_totais",
-        "proc_rodando",
-        "proc_cpu_top_pct",
-        "proc_cpu_top_threads",
-        "proc_ram_top_mb",
-        "proc_ram_top_pct",
-        "rede_recebida_mb",
-        "rede_enviada_mb",
-        "uptime_segundos"
-    ]
+    if len(colunas_numericas) > 0:
+        mascara = (
+            df[colunas_numericas].isna() | (df[colunas_numericas] >= 0)
+        ).all(axis=1)
+        df = df[mascara].copy()
 
-    for coluna in colunas_nao_negativas:
-        if coluna in df.columns:
+    # Coerência: uso nunca pode passar do total (ram, swap, disco...)
+    for coluna in list(df.columns):
+        if not coluna.endswith("_total"):
+            continue
+
+        coluna_usada = coluna[: -len("_total")] + "_used"
+
+        if coluna_usada in df.columns:
             df = df[
-                df[coluna].isna() | (df[coluna] >= 0)
+                df[coluna].isna()
+                | df[coluna_usada].isna()
+                | (df[coluna_usada] <= df[coluna])
             ].copy()
 
     # Mantém apenas uma medição por máquina e instante.
     df = df.drop_duplicates(
-        subset=["cod_maquina", "timestamp"],
+        subset=["mac", "timestamp"],
         keep="last"
     )
 
@@ -277,6 +253,68 @@ def remover_registros_invalidos(df):
         )
 
     return df
+
+
+def interpretar_processos(valor):
+    """Converte o JSON da coluna 'processos' em dicionário (vazio se inválido)."""
+
+    if not isinstance(valor, str) or not valor.strip():
+        return {}
+
+    try:
+        dados = json.loads(valor)
+    except json.JSONDecodeError:
+        return {}
+
+    return dados if isinstance(dados, dict) else {}
+
+
+def criar_colunas_processos(df):
+    """Abre o JSON de processos em colunas próprias."""
+
+    linhas = []
+
+    for valor in df["processos"]:
+        dados = interpretar_processos(valor)
+        top_cpu = dados.get("top_cpu") or {}
+        top_ram = dados.get("top_ram") or {}
+
+        linhas.append({
+            "proc_totais": dados.get("total"),
+            "proc_rodando": dados.get("rodando"),
+            "proc_cpu_top_nome": top_cpu.get("nome"),
+            "proc_cpu_top_pid": top_cpu.get("pid"),
+            "proc_cpu_top_pct": top_cpu.get("cpu_pct"),
+            "proc_cpu_top_threads": top_cpu.get("threads"),
+            "proc_ram_top_nome": top_ram.get("nome"),
+            "proc_ram_top_pid": top_ram.get("pid"),
+            "proc_ram_top_mb": top_ram.get("ram_mb"),
+            "proc_ram_top_pct": top_ram.get("ram_pct"),
+            "proc_top_lista": json.dumps(
+                dados.get("top_processos_cpu", []),
+                ensure_ascii=False
+            ),
+        })
+
+    detalhes = pd.DataFrame(linhas, index=df.index)
+
+    colunas_numericas = [
+        "proc_totais",
+        "proc_rodando",
+        "proc_cpu_top_pid",
+        "proc_cpu_top_pct",
+        "proc_cpu_top_threads",
+        "proc_ram_top_pid",
+        "proc_ram_top_mb",
+        "proc_ram_top_pct",
+    ]
+
+    for coluna in colunas_numericas:
+        detalhes[coluna] = pd.to_numeric(detalhes[coluna], errors="coerce")
+
+    df = df.drop(columns=["processos"])
+
+    return pd.concat([df, detalhes], axis=1)
 
 
 def criar_colunas_derivadas(df):
@@ -295,39 +333,19 @@ def criar_colunas_derivadas(df):
         6: "DOMINGO"
     }
 
-    df["dia_semana"] = df["timestamp"].dt.dayofweek.map(
-        dias_semana
-    )
+    df["dia_semana"] = df["timestamp"].dt.day_of_week.map(dias_semana)
+    df["fim_de_semana"] = df["timestamp"].dt.day_of_week >= 5
+    df["eh_feriado"] = df["tipo_dia"] == "FERIADO"
 
-    df["fim_de_semana"] = (
-        df["timestamp"].dt.dayofweek >= 5
-    )
+    # Faixa de uso para cada percentual (ex.: ram_percent -> ram_faixa).
+    for coluna in colunas_percentuais(df):
+        nome_faixa = coluna.removesuffix("_percent") + "_faixa"
 
-    # Classifica a utilização real da CPU.
-    df["cpu_faixa"] = pd.cut(
-        df["cpu_pct"],
-        bins=[-0.001, 40, 70, 90, 100],
-        labels=["BAIXA", "MODERADA", "ALTA", "CRITICA"]
-    )
-
-    # Classifica a utilização da RAM.
-    df["ram_faixa"] = pd.cut(
-        df["ram_pct"],
-        bins=[-0.001, 50, 75, 90, 100],
-        labels=["BAIXA", "MODERADA", "ALTA", "CRITICA"]
-    )
-
-    # Classifica a latência em milissegundos.
-    df["latencia_faixa"] = pd.cut(
-        df["latencia_ms"],
-        bins=[-0.001, 20, 50, float("inf")],
-        labels=["BAIXA", "MODERADA", "ALTA"]
-    )
-
-    # Identifica medições coletadas em feriados.
-    df["eh_feriado"] = (
-        df["tipo_dia"].astype(str).str.upper() == "FERIADO"
-    )
+        df[nome_faixa] = pd.cut(
+            df[coluna],
+            bins=[-0.001, 50, 75, 90, 100],
+            labels=["BAIXA", "MODERADA", "ALTA", "CRITICA"]
+        )
 
     return df
 
@@ -335,71 +353,38 @@ def criar_colunas_derivadas(df):
 def organizar_colunas(df):
     """Organiza as colunas para facilitar a leitura do CSV."""
 
-    colunas_prioritarias = [
-        "cod_maquina",
-        "mac_address",
+    colunas_inicio = [
+        "mac",
         "hostname",
         "so_sistema",
         "arquitetura",
+        "cpu_fisicos",
+        "cpu_logicos",
         "timestamp",
         "data",
         "hora",
         "dia_semana",
         "tipo_dia",
+        "feriado",
         "fim_de_semana",
         "eh_feriado",
-        "fluxo_veiculos_sim",
-        "cpu_pct",
-        "cpu_simulada_pct",
-        "cpu_faixa",
-        "cpu_freq_mhz",
-        "cpu_nucleos_fisicos",
-        "cpu_nucleos_logicos",
-        "ram_total_gib",
-        "ram_uso_gib",
-        "ram_disponivel_gib",
-        "ram_pct",
-        "ram_faixa",
-        "swap_total_gib",
-        "swap_uso_gib",
-        "swap_pct",
-        "disco_total_gib",
-        "disco_uso_gib",
-        "disco_livre_gib",
-        "disco_pct",
-        "disco_leitura_mb",
-        "disco_escrita_mb",
-        "proc_totais",
-        "proc_rodando",
-        "proc_cpu_top_nome",
-        "proc_cpu_top_pid",
-        "proc_cpu_top_pct",
-        "proc_cpu_top_threads",
-        "proc_ram_top_nome",
-        "proc_ram_top_pid",
-        "proc_ram_top_mb",
-        "proc_ram_top_pct",
-        "proc_top_lista",
-        "rede_recebida_mb",
-        "rede_enviada_mb",
-        "latencia_ms",
-        "latencia_faixa",
-        "uptime_segundos"
     ]
 
-    colunas_existentes = [
-        coluna
-        for coluna in colunas_prioritarias
-        if coluna in df.columns
-    ]
-
-    outras_colunas = [
+    colunas_fim = [
         coluna
         for coluna in df.columns
-        if coluna not in colunas_existentes
+        if coluna.startswith("proc_")
     ]
 
-    return df[colunas_existentes + outras_colunas]
+    inicio = [coluna for coluna in colunas_inicio if coluna in df.columns]
+
+    meio = [
+        coluna
+        for coluna in df.columns
+        if coluna not in inicio and coluna not in colunas_fim
+    ]
+
+    return df[inicio + meio + colunas_fim]
 
 
 def salvar_csv_silver(df, chave_origem):
@@ -411,7 +396,7 @@ def salvar_csv_silver(df, chave_origem):
 
     conteudo_csv = df.to_csv(
         index=False,
-        sep=";",
+        sep=SEPARADOR_SILVER,
         encoding="utf-8"
     )
 
@@ -438,11 +423,11 @@ def main():
 
     validar_colunas(df)
 
-    df = padronizar_unidades(df)
-
     df = tratar_tipos_dados(df)
 
     df = remover_registros_invalidos(df)
+
+    df = criar_colunas_processos(df)
 
     df = criar_colunas_derivadas(df)
 
@@ -453,14 +438,15 @@ def main():
     print("ETL Silver finalizado com sucesso!")
 
 
-try:
-    main()
-except NoCredentialsError:
+if __name__ == "__main__":
+    try:
+        main()
+    except NoCredentialsError:
         print(
             "Erro: credenciais AWS não encontradas. "
             "Verifique suas credenciais ou permissões IAM."
         )
-except ClientError as erro:
+    except ClientError as erro:
         print(f"Erro ao acessar o S3: {erro}")
-except (ValueError, FileNotFoundError) as erro:
+    except (ValueError, FileNotFoundError) as erro:
         print(f"Erro no processamento: {erro}")

@@ -1,0 +1,8 @@
+boto3
+pandas
+mysql-connector-python
+psutil
+speedtest-cli
+getmac
+holidays
+requests
