@@ -112,7 +112,7 @@ O job ETL Silver faz o processamento dos dados brutos para garantir a qualidade 
     * Remove registros com `timestamp`, `mac` ou `tipo_dia` ausentes, ou com `tipo_dia` fora de `DIA_UTIL`, `FIM_DE_SEMANA`, `FERIADO`.
     * Garante que toda coluna `*_percent` (RAM, disco, swap) e a CPU fiquem entre $0\%$ e $100\%$.
     * Garante que nenhuma métrica numérica seja negativa.
-    * Garante coerência de uso ($\text{\*\_used} \le \text{\*\_total}$).
+    * Garante coerência de uso (não pase do total da máquina).
     * **Deduplicação:** Remove medições duplicadas baseadas na combinação `mac` + `timestamp`.
   * **Processos:** Abre o JSON da coluna `processos` em colunas próprias (`proc_totais`, `proc_rodando`, `proc_cpu_top_nome`, `proc_cpu_top_pct`, `proc_ram_top_nome`, `proc_ram_top_mb`, `proc_top_lista`, entre outras).
   * **Colunas derivadas:** `data`, `hora`, `dia_semana`, `fim_de_semana`, `eh_feriado` e uma faixa de uso para cada percentual (ex.: `ram_percent` ➔ `ram_faixa`: `BAIXA`, `MODERADA`, `ALTA`, `CRITICA`).
