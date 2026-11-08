@@ -25,7 +25,7 @@ Executado diretamente no servidor rodoviário (Edge Server). A captura é **din�
 #### 🖼️ Arquitetura da Captura
 
 <!-- Coloque aqui a imagem da arquitetura de captura e ajuste o caminho abaixo, se necessário -->
-![Arquitetura da Captura](img/arquitetura_captura.png)
+![Arquitetura da Captura](img/captureArq.png)
 
 #### 1.1 Passo a passo
 1. **Identificação:** lê o endereço MAC da interface de rede (formatado sem `:` e em maiúsculas), que é o identificador único do servidor.
