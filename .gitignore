@@ -1,0 +1,53 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+
+# ===== Ambientes virtuais =====
+venv/
+.venv/
+env/
+ENV/
+
+# ===== Segredos e credenciais (NUNCA versionar) =====
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.aws/
+credentials
+config.ini
+secrets.json
+
+# ===== Dados gerados localmente =====
+# CSVs/JSONs de teste da captura e dos ETLs
+*.csv
+*.parquet
+data/
+output/
+tmp/
+
+# ===== Logs =====
+*.log
+logs/
+
+# ===== Flask =====
+instance/
+.webassets-cache
+
+# ===== IDEs e editores =====
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===== Sistema operacional =====
+.DS_Store
+Thumbs.db
+desktop.ini
