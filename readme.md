@@ -208,7 +208,7 @@ mysql-connector-python
 pip install -r requirements-client.txt
 
 # No servidor da API / ETLs
-pip install -r requirements-servidor.txt
+pip install -r requirements-api.txt
 ```
 
 ### Configuração AWS e Banco de Dados
