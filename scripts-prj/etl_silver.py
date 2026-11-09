@@ -1,9 +1,10 @@
 import json
+import logging
 from io import BytesIO
+from pathlib import PurePosixPath
 
 import boto3
 import pandas as pd
-from botocore.exceptions import ClientError, NoCredentialsError
 
 
 REGIAO_AWS = "us-east-1"
@@ -14,12 +15,8 @@ BUCKET_SILVER = "datalake-silver-roadvizor-sptech"
 PREFIXO_BRONZE = "raw/"
 PREFIXO_SILVER = "trusted/"
 
-# O clientV02 grava o CSV com ";" (constante SEPARADOR_CSV no client).
-SEPARADOR_BRONZE = ";"
-# Mesmo padrão do Bronze, compatível com a leitura atual da Gold.
-SEPARADOR_SILVER = ";"
+SEPARADOR = ";"
 
-# Colunas que o clientV02 SEMPRE grava, independente dos componentes da API.
 COLUNAS_FIXAS = [
     "timestamp",
     "mac",
@@ -33,7 +30,6 @@ COLUNAS_FIXAS = [
     "processos",
 ]
 
-# Colunas de texto que nunca devem ser convertidas para número.
 COLUNAS_TEXTO = [
     "timestamp",
     "mac",
@@ -45,140 +41,148 @@ COLUNAS_TEXTO = [
     "processos",
 ]
 
-TIPOS_DIA_VALIDOS = {"DIA_UTIL", "FIM_DE_SEMANA", "FERIADO"}
+TIPOS_DIA_VALIDOS = {
+    "DIA_UTIL",
+    "FIM_DE_SEMANA",
+    "FERIADO",
+}
 
-# As colunas dos componentes são dinâmicas (dependem do campo "nome" cadastrado
-# na tabela componente). Regras genéricas aplicadas na Silver:
-#   - toda coluna terminada em "_percent" (ram, disco, swap...) fica entre 0 e 100;
-#   - componentes que retornam um número simples (ex.: CPU) viram uma coluna só
-#     com o nome do componente. Liste aqui o nome já sanitizado desses componentes
-#     (minúsculo, sem acento, com "_") para validar 0-100 também.
 COLUNAS_PERCENTUAIS_SIMPLES = ["cpu"]
 
-s3 = boto3.client("s3", region_name=REGIAO_AWS)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+
+logger = logging.getLogger(__name__)
+
+s3 = boto3.client(
+    "s3",
+    region_name=REGIAO_AWS,
+)
 
 
-def buscar_csv_mais_recente():
-    """Localiza o CSV mais recente na camada Bronze."""
+def buscar_arquivos_bronze():
+    """Lista os arquivos CSV disponíveis no Bronze."""
 
     arquivos = []
+
     paginador = s3.get_paginator("list_objects_v2")
 
-    paginas = paginador.paginate(
+    for pagina in paginador.paginate(
         Bucket=BUCKET_BRONZE,
-        Prefix=PREFIXO_BRONZE
-    )
-
-    for pagina in paginas:
+        Prefix=PREFIXO_BRONZE,
+    ):
         for arquivo in pagina.get("Contents", []):
             chave = arquivo["Key"]
 
-            if (
-                chave.lower().endswith(".csv")
-                and chave.startswith(PREFIXO_BRONZE)
-            ):
-                arquivos.append(arquivo)
+            if chave.lower().endswith(".csv"):
+                arquivos.append(chave)
 
-    if not arquivos:
-        raise FileNotFoundError(
-            "Nenhum arquivo CSV foi encontrado na camada Bronze."
-        )
+    arquivos.sort()
 
-    arquivo_mais_recente = max(
-        arquivos,
-        key=lambda arquivo: arquivo["LastModified"]
-    )
-
-    return arquivo_mais_recente["Key"]
+    return arquivos
 
 
 def ler_csv_bronze(chave):
-    """Lê o CSV armazenado na camada Bronze."""
+    """Lê um CSV armazenado no Bronze."""
 
     resposta = s3.get_object(
         Bucket=BUCKET_BRONZE,
-        Key=chave
+        Key=chave,
     )
 
     conteudo = resposta["Body"].read()
 
     df = pd.read_csv(
         BytesIO(conteudo),
-        sep=SEPARADOR_BRONZE,
+        sep=SEPARADOR,
         encoding="utf-8",
-        # MAC como texto: sem isso, um MAC só com dígitos (ou com "E" no meio)
-        # seria lido como número e perderia zeros à esquerda.
-        dtype={"mac": str}
+        dtype={"mac": "string"},
     )
 
-    print(f"Arquivo lido: {chave}")
-    print(f"Registros encontrados: {len(df)}")
+    logger.info("Arquivo lido: %s", chave)
+    logger.info("Registros encontrados: %s", len(df))
 
     return df
 
 
 def validar_colunas(df):
-    """Verifica se o CSV possui as colunas fixas do client."""
+    """Verifica se as colunas fixas estão presentes."""
 
-    colunas_ausentes = [
+    ausentes = [
         coluna
         for coluna in COLUNAS_FIXAS
         if coluna not in df.columns
     ]
 
-    if colunas_ausentes:
+    if ausentes:
         raise ValueError(
-            "O CSV não possui todas as colunas necessárias: "
-            + ", ".join(colunas_ausentes)
+            "Colunas obrigatórias ausentes: "
+            + ", ".join(ausentes)
         )
 
-    colunas_componentes = [
+    componentes = [
         coluna
         for coluna in df.columns
         if coluna not in COLUNAS_FIXAS
     ]
 
-    print(
-        f"Colunas de componentes encontradas: {len(colunas_componentes)}"
+    logger.info(
+        "Componentes encontrados: %s",
+        len(componentes),
     )
 
 
 def tratar_tipos_dados(df):
-    """Converte as colunas para os tipos adequados."""
+    """Converte os dados para os tipos adequados."""
+
+    df = df.copy()
 
     df["timestamp"] = pd.to_datetime(
         df["timestamp"],
         format="%Y-%m-%d %H:%M:%S",
-        errors="coerce"
+        errors="coerce",
     )
 
-    df["mac"] = df["mac"].astype("string").str.strip().str.upper()
+    df["mac"] = (
+        df["mac"]
+        .astype("string")
+        .str.strip()
+        .str.upper()
+    )
+
     df["tipo_dia"] = (
-        df["tipo_dia"].astype("string").str.strip().str.upper()
+        df["tipo_dia"]
+        .astype("string")
+        .str.strip()
+        .str.upper()
     )
-    df["feriado"] = df["feriado"].astype("string").fillna("")
 
-    # Colunas dinâmicas lidas como texto: converte para número quando TODOS
-    # os valores preenchidos forem numéricos (ex.: duplex/flags continuam texto).
+    df["feriado"] = (
+        df["feriado"]
+        .astype("string")
+        .fillna("")
+    )
+
     for coluna in df.columns:
         if coluna in COLUNAS_TEXTO:
             continue
 
-        serie = df[coluna]
+        convertida = pd.to_numeric(
+            df[coluna],
+            errors="coerce",
+        )
 
-        if pd.api.types.is_numeric_dtype(serie) or pd.api.types.is_bool_dtype(serie):
-            continue
-
-        convertida = pd.to_numeric(serie, errors="coerce")
-
-        if convertida.notna().sum() == serie.notna().sum():
+        if convertida.notna().sum() == df[coluna].notna().sum():
             df[coluna] = convertida
 
     return df
 
 
 def colunas_percentuais(df):
-    """Retorna as colunas numéricas que representam percentual de uso."""
+    """Identifica as colunas que representam percentuais."""
 
     candidatas = [
         coluna
@@ -200,33 +204,44 @@ def colunas_percentuais(df):
 
 
 def remover_registros_invalidos(df):
-    """Remove registros incompletos, inválidos ou duplicados."""
+    """Remove registros incompletos, inválidos e duplicados."""
 
     quantidade_inicial = len(df)
 
-    # Campos essenciais sempre presentes
-    df = df.dropna(subset=["timestamp", "mac", "tipo_dia"]).copy()
-    df = df[df["tipo_dia"].isin(TIPOS_DIA_VALIDOS)].copy()
+    df = df.dropna(
+        subset=["timestamp", "mac", "tipo_dia"]
+    ).copy()
 
-    # Percentuais entre 0 e 100 (valores vazios são mantidos)
+    df = df[
+        (df["mac"].str.len() > 0)
+        & (df["tipo_dia"].isin(TIPOS_DIA_VALIDOS))
+    ].copy()
+
     for coluna in colunas_percentuais(df):
-        df = df[df[coluna].isna() | df[coluna].between(0, 100)].copy()
+        df = df[
+            df[coluna].isna()
+            | df[coluna].between(0, 100)
+        ].copy()
 
-    # Nenhuma métrica numérica coletada pode ser negativa
-    colunas_numericas = df.select_dtypes(include="number").columns
+    colunas_numericas = df.select_dtypes(
+        include="number"
+    ).columns
 
     if len(colunas_numericas) > 0:
         mascara = (
-            df[colunas_numericas].isna() | (df[colunas_numericas] >= 0)
+            df[colunas_numericas].isna()
+            | (df[colunas_numericas] >= 0)
         ).all(axis=1)
+
         df = df[mascara].copy()
 
-    # Coerência: uso nunca pode passar do total (ram, swap, disco...)
-    for coluna in list(df.columns):
+    for coluna in df.columns:
         if not coluna.endswith("_total"):
             continue
 
-        coluna_usada = coluna[: -len("_total")] + "_used"
+        coluna_usada = (
+            coluna[:-len("_total")] + "_used"
+        )
 
         if coluna_usada in df.columns:
             df = df[
@@ -235,28 +250,31 @@ def remover_registros_invalidos(df):
                 | (df[coluna_usada] <= df[coluna])
             ].copy()
 
-    # Mantém apenas uma medição por máquina e instante.
     df = df.drop_duplicates(
         subset=["mac", "timestamp"],
-        keep="last"
+        keep="last",
     )
 
-    quantidade_final = len(df)
-    removidos = quantidade_inicial - quantidade_final
+    logger.info(
+        "Registros removidos: %s",
+        quantidade_inicial - len(df),
+    )
 
-    print(f"Registros removidos: {removidos}")
-    print(f"Registros válidos: {quantidade_final}")
+    logger.info(
+        "Registros válidos: %s",
+        len(df),
+    )
 
     if df.empty:
         raise ValueError(
-            "Nenhum registro válido restou após o tratamento."
+            "Nenhum registro válido restou após a validação."
         )
 
     return df
 
 
 def interpretar_processos(valor):
-    """Converte o JSON da coluna 'processos' em dicionário (vazio se inválido)."""
+    """Interpreta o JSON armazenado na coluna processos."""
 
     if not isinstance(valor, str) or not valor.strip():
         return {}
@@ -270,12 +288,13 @@ def interpretar_processos(valor):
 
 
 def criar_colunas_processos(df):
-    """Abre o JSON de processos em colunas próprias."""
+    """Transforma as informações de processos em colunas."""
 
     linhas = []
 
     for valor in df["processos"]:
         dados = interpretar_processos(valor)
+
         top_cpu = dados.get("top_cpu") or {}
         top_ram = dados.get("top_ram") or {}
 
@@ -292,11 +311,14 @@ def criar_colunas_processos(df):
             "proc_ram_top_pct": top_ram.get("ram_pct"),
             "proc_top_lista": json.dumps(
                 dados.get("top_processos_cpu", []),
-                ensure_ascii=False
+                ensure_ascii=False,
             ),
         })
 
-    detalhes = pd.DataFrame(linhas, index=df.index)
+    detalhes = pd.DataFrame(
+        linhas,
+        index=df.index,
+    )
 
     colunas_numericas = [
         "proc_totais",
@@ -310,15 +332,23 @@ def criar_colunas_processos(df):
     ]
 
     for coluna in colunas_numericas:
-        detalhes[coluna] = pd.to_numeric(detalhes[coluna], errors="coerce")
+        detalhes[coluna] = pd.to_numeric(
+            detalhes[coluna],
+            errors="coerce",
+        )
 
     df = df.drop(columns=["processos"])
 
-    return pd.concat([df, detalhes], axis=1)
+    return pd.concat(
+        [df, detalhes],
+        axis=1,
+    )
 
 
 def criar_colunas_derivadas(df):
-    """Cria colunas úteis para análises posteriores."""
+    """Cria informações complementares para análises."""
+
+    df = df.copy()
 
     df["data"] = df["timestamp"].dt.strftime("%Y-%m-%d")
     df["hora"] = df["timestamp"].dt.strftime("%H:%M:%S")
@@ -330,28 +360,42 @@ def criar_colunas_derivadas(df):
         3: "QUINTA",
         4: "SEXTA",
         5: "SABADO",
-        6: "DOMINGO"
+        6: "DOMINGO",
     }
 
-    df["dia_semana"] = df["timestamp"].dt.day_of_week.map(dias_semana)
-    df["fim_de_semana"] = df["timestamp"].dt.day_of_week >= 5
-    df["eh_feriado"] = df["tipo_dia"] == "FERIADO"
+    df["dia_semana"] = (
+        df["timestamp"].dt.day_of_week.map(dias_semana)
+    )
 
-    # Faixa de uso para cada percentual (ex.: ram_percent -> ram_faixa).
+    df["fim_de_semana"] = (
+        df["timestamp"].dt.day_of_week >= 5
+    )
+
+    df["eh_feriado"] = (
+        df["tipo_dia"] == "FERIADO"
+    )
+
     for coluna in colunas_percentuais(df):
-        nome_faixa = coluna.removesuffix("_percent") + "_faixa"
+        nome_faixa = (
+            coluna.removesuffix("_percent") + "_faixa"
+        )
 
         df[nome_faixa] = pd.cut(
             df[coluna],
             bins=[-0.001, 50, 75, 90, 100],
-            labels=["BAIXA", "MODERADA", "ALTA", "CRITICA"]
+            labels=[
+                "BAIXA",
+                "MODERADA",
+                "ALTA",
+                "CRITICA",
+            ],
         )
 
     return df
 
 
 def organizar_colunas(df):
-    """Organiza as colunas para facilitar a leitura do CSV."""
+    """Organiza as colunas do arquivo tratado."""
 
     colunas_inicio = [
         "mac",
@@ -376,77 +420,118 @@ def organizar_colunas(df):
         if coluna.startswith("proc_")
     ]
 
-    inicio = [coluna for coluna in colunas_inicio if coluna in df.columns]
+    inicio = [
+        coluna
+        for coluna in colunas_inicio
+        if coluna in df.columns
+    ]
 
     meio = [
         coluna
         for coluna in df.columns
-        if coluna not in inicio and coluna not in colunas_fim
+        if coluna not in inicio
+        and coluna not in colunas_fim
     ]
 
     return df[inicio + meio + colunas_fim]
 
 
+def normalizar_mac(mac):
+    """Prepara o MAC para ser utilizado no caminho do S3."""
+
+    mac = str(mac).strip().upper()
+    mac = mac.replace(":", "-")
+
+    if not mac or "/" in mac or "\\" in mac:
+        raise ValueError(f"MAC inválido: {mac}")
+
+    return mac
+
+
 def salvar_csv_silver(df, chave_origem):
-    """Salva o CSV tratado na camada Silver."""
+    """Salva os dados separados por máquina na Silver."""
 
-    nome_arquivo = chave_origem.split("/")[-1]
+    nome_arquivo = PurePosixPath(chave_origem).name
 
-    chave_destino = f"{PREFIXO_SILVER}{nome_arquivo}"
+    for mac, dados_servidor in df.groupby("mac", sort=True):
+        mac_prefixo = normalizar_mac(mac)
 
-    conteudo_csv = df.to_csv(
-        index=False,
-        sep=SEPARADOR_SILVER,
-        encoding="utf-8"
-    )
+        chave_destino = (
+            f"{PREFIXO_SILVER}"
+            f"{mac_prefixo}/"
+            f"{nome_arquivo}"
+        )
 
-    s3.put_object(
-        Bucket=BUCKET_SILVER,
-        Key=chave_destino,
-        Body=conteudo_csv.encode("utf-8"),
-        ContentType="text/csv; charset=utf-8"
-    )
+        conteudo = dados_servidor.to_csv(
+            index=False,
+            sep=SEPARADOR,
+        )
 
-    print(f"Arquivo salvo na Silver: {chave_destino}")
-    print(f"Total de registros: {len(df)}")
-    print(f"Total de colunas: {len(df.columns)}")
+        s3.put_object(
+            Bucket=BUCKET_SILVER,
+            Key=chave_destino,
+            Body=conteudo.encode("utf-8"),
+            ContentType="text/csv; charset=utf-8",
+        )
+
+        logger.info(
+            "Salvo: s3://%s/%s (%s registros)",
+            BUCKET_SILVER,
+            chave_destino,
+            len(dados_servidor),
+        )
 
 
-def main():
-    """Executa o processo ETL da camada Silver."""
+def processar_arquivo(chave_origem):
+    """Executa todas as etapas do ETL em um arquivo."""
 
-    print("Iniciando ETL Silver...")
-
-    chave_origem = buscar_csv_mais_recente()
+    logger.info("Iniciando: %s", chave_origem)
 
     df = ler_csv_bronze(chave_origem)
 
     validar_colunas(df)
 
     df = tratar_tipos_dados(df)
-
     df = remover_registros_invalidos(df)
-
     df = criar_colunas_processos(df)
-
     df = criar_colunas_derivadas(df)
-
     df = organizar_colunas(df)
 
     salvar_csv_silver(df, chave_origem)
 
-    print("ETL Silver finalizado com sucesso!")
+    logger.info(
+        "Processamento concluído: %s registros",
+        len(df),
+    )
+
+
+def main():
+    """Executa o ETL Silver localmente."""
+
+    logger.info("Iniciando ETL Silver")
+
+    arquivos = buscar_arquivos_bronze()
+
+    if not arquivos:
+        logger.warning("Nenhum CSV encontrado no Bronze.")
+        return
+
+    logger.info(
+        "Arquivos encontrados: %s",
+        len(arquivos),
+    )
+
+    for arquivo in arquivos:
+        try:
+            processar_arquivo(arquivo)
+        except Exception:
+            logger.exception(
+                "Erro ao processar o arquivo: %s",
+                arquivo,
+            )
+
+    logger.info("ETL Silver finalizado.")
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except NoCredentialsError:
-        print(
-            "Erro: credenciais AWS não encontradas. "
-            "Verifique suas credenciais ou permissões IAM."
-        )
-    except ClientError as erro:
-        print(f"Erro ao acessar o S3: {erro}")
-    except (ValueError, FileNotFoundError) as erro:
-        print(f"Erro no processamento: {erro}")
+    main()
