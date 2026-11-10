@@ -31,7 +31,7 @@ SEPARADOR_CSV = ";"  # padrão do projeto: Bronze, Silver e Gold usam ";"
 # SENHORES! EU PREFERI NÃO EXECUTAR DIRETAMENTE O TEXTO, AI MONTEI UM DICIONÁRIO
 # QUE CONVERTE OS VALORES PARA SEUS VALORES COMO PARÂMETROS
 COLETORES = {
-    "psutil.cpu_percent()": lambda: psutil.cpu_percent(interval=1),
+    "psutil.cpu_percent(interval=1)": lambda: psutil.cpu_percent(interval=1),
     "psutil.virtual_memory()": lambda: psutil.virtual_memory(),
     'psutil.disk_usage("/")': lambda: psutil.disk_usage("/"),
     "psutil.net_if_stats()": lambda: psutil.net_if_stats(),
@@ -442,6 +442,9 @@ def main():
  
     # A configuração é consultada antes do início do lote de leituras.
     componentes = obter_configuracao(mac)
+    print("Componentes recebidos da API:")
+    for componente in componentes:
+        print(componente)
     print(f"Componentes habilitados recebidos da API: {len(componentes)}")
  
     agora = datetime.datetime.now()
