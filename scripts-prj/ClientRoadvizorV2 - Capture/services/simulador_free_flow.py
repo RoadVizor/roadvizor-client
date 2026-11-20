@@ -122,10 +122,10 @@ def distribuir_veiculos(data_inicio, tipo_dia):
     return veiculos, total_diario
 
 #Transforma o movimento de veículos em métricas coerentes do servidor
+
 def gerar_metricas(fluxo, estado, numero_leitura):
 
-    # Cada registro cobre cerca de 14,4 segundos. Convertendo para uma taxa
-    # por minuto, conseguimos comparar o movimento com uma carga de servidor
+    # Cada registro cobre cerca de 14,4 segundos.
     fluxo_por_minuto = fluxo * 60 / (
         DURACAO_DIA_SEGUNDOS / QUANTIDADE_LEITURAS
     )
@@ -133,19 +133,19 @@ def gerar_metricas(fluxo, estado, numero_leitura):
     # Mais veículos = mais transações para processar
     transacoes = max(0, fluxo + random.randint(-2, 3))
 
-    # Às vezes o servidor sofre uma sobrecarga
-    #  N acontece em toda leitura
-    sobrecarga = random.random() < 0.012
+    # 20% de chance de sobrecarga por leitura
+    sobrecarga = random.random() < 0.20
 
-    # Falhas podem acontecer independentemente do volume de veículos.
+    # Falhas de comunicação podem acontecer independentemente do fluxo
     falha_comunicacao = random.random() < 0.008
 
     fator_sobrecarga = 1.45 if sobrecarga else 1.0
 
-    # O fluxo influencia a CPU e a RAM; a sobrecarga dá um empurrão extra.
+    # O fluxo influencia a CPU e a RAM
     cpu_alvo = 18 + fluxo_por_minuto * 0.75 * fator_sobrecarga
     ram_alvo = 30 + fluxo_por_minuto * 0.40 * fator_sobrecarga
 
+    # Define latência e perda de pacotes
     if falha_comunicacao:
         latencia_alvo = random.uniform(150, 500)
         perda_pacotes = random.uniform(3, 18)
@@ -154,23 +154,32 @@ def gerar_metricas(fluxo, estado, numero_leitura):
         latencia_alvo += random.uniform(0, 12)
         perda_pacotes = random.uniform(0, 0.4)
 
-    estado["cpu"] = limitar(
-        variar_suavemente(estado["cpu"], cpu_alvo),
-        5,
-        99
-    )
+    # Sobrecarga coloca CPU e RAM em estado crítico
+    if sobrecarga:
+        estado["cpu"] = random.uniform(90, 98)
+        estado["ram"] = random.uniform(90, 96)
 
-    estado["ram"] = limitar(
-        variar_suavemente(estado["ram"], ram_alvo),
-        15,
-        96
-    )
+    # Sem sobrecarga, as métricas variam suavemente
+    else:
+        estado["cpu"] = limitar(
+            variar_suavemente(estado["cpu"], cpu_alvo),
+            5,
+            99
+        )
 
+        estado["ram"] = limitar(
+            variar_suavemente(estado["ram"], ram_alvo),
+            15,
+            96
+        )
+
+    # Atualiza a latência independentemente da sobrecarga
     estado["latencia"] = limitar(
         variar_suavemente(estado["latencia"], latencia_alvo, 0.35),
         5,
         500
     )
+
 
     # O disco cresce aos poucos conforme o servidor acumula registros
     # Eu nem me lembro se  agente monitora isso mas eu coloquei 
