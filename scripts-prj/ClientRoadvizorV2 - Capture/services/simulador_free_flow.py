@@ -123,7 +123,7 @@ def distribuir_veiculos(data_inicio, tipo_dia):
 
 #Transforma o movimento de veículos em métricas coerentes do servidor
 
-def gerar_metricas(fluxo, estado, numero_leitura):
+def gerar_metricas(fluxo, estado, numero_leitura, hora):
 
     # Cada registro cobre cerca de 14,4 segundos.
     fluxo_por_minuto = fluxo * 60 / (
@@ -134,7 +134,17 @@ def gerar_metricas(fluxo, estado, numero_leitura):
     transacoes = max(0, fluxo + random.randint(-2, 3))
 
     # 20% de chance de sobrecarga por leitura
-    sobrecarga = random.random() < 0.20
+        # A sobrecarga é mais frequente nos horários de maior movimento
+    if 0 <= hora < 5:
+        chance_sobrecarga = 0.10
+
+    elif (7 <= hora < 10) or (16 <= hora < 20):
+        chance_sobrecarga = 0.25
+
+    else:
+        chance_sobrecarga = 0.22
+
+    sobrecarga = random.random() < chance_sobrecarga
 
     # Falhas de comunicação podem acontecer independentemente do fluxo
     falha_comunicacao = random.random() < 0.008
@@ -352,9 +362,10 @@ def gerar_leituras(data_inicio=None):
         fluxo = veiculos_por_leitura[numero]
 
         metricas, processos, operacao = gerar_metricas(
-            fluxo,
-            estado,
-            numero
+             fluxo,
+             estado,
+             numero,
+             timestamp.hour
         )
 
         leituras.append({
