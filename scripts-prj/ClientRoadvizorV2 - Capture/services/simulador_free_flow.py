@@ -6,6 +6,10 @@ import random
 import csv
 import json
 
+#Simular em tempo real
+import time
+import os
+
 # Esse aq serve pra gente poder ver os dias 
 import holidays
 
@@ -125,10 +129,8 @@ def distribuir_veiculos(data_inicio, tipo_dia):
 
 def gerar_metricas(fluxo, estado, numero_leitura, hora):
 
-    # Cada registro cobre cerca de 14,4 segundos.
-    fluxo_por_minuto = fluxo * 60 / (
-        DURACAO_DIA_SEGUNDOS / QUANTIDADE_LEITURAS
-    )
+    # Agora cada registro representa um minuto real
+    fluxo_por_minuto = fluxo
 
     # Mais veículos = mais transações para processar
     transacoes = max(0, fluxo + random.randint(-2, 3))
@@ -322,27 +324,150 @@ def identificar_cenario(fluxo_por_minuto):
 
 # Gera o dia inteiro de uma vez em 24 h
 # cada registro já recebe seu tempo correspondente
-def gerar_leituras(data_inicio=None):
 
-    if data_inicio is None:
-        agora = datetime.datetime.now()
-        data_inicio = agora.replace(
+# Prepara os dados do dia para calcular o fluxo por minuto
+
+def inicializar_dia(data):
+    tipo_dia, nome_feriado = identificar_tipo_dia(data)
+
+    total_diario = random.randint(1500, 25000)
+
+    if tipo_dia == "FERIADO":
+        total_diario *= 2
+
+    soma_pesos = 0
+
+    for minuto in range(1440):
+        horario = data.replace(
             hour=0,
             minute=0,
             second=0,
             microsecond=0
-        )
+        ) + datetime.timedelta(minutes=minuto)
 
-    tipo_dia, nome_feriado = identificar_tipo_dia(data_inicio)
+        soma_pesos += obter_peso_horario(horario.hour)
 
-    veiculos_por_leitura, total_diario = distribuir_veiculos(
-        data_inicio,
-        tipo_dia
+    return tipo_dia, nome_feriado, total_diario, soma_pesos
+
+
+# Calcula quantos veículos passam durante aquele minuto
+
+def calcular_fluxo_minuto(hora, total_diario, soma_pesos):
+    peso = obter_peso_horario(hora)
+
+    fluxo = round(total_diario * peso / soma_pesos)
+
+    return max(0, fluxo)
+
+
+# Gera somente uma leitura usando o horário atual
+
+def gerar_leitura(estado, numero_leitura, dados_dia):
+    agora = datetime.datetime.now()
+
+    tipo_dia, nome_feriado, total_diario, soma_pesos = dados_dia
+
+    fluxo = calcular_fluxo_minuto(
+        agora.hour,
+        total_diario,
+        soma_pesos
     )
 
-    # As métricas começam em níveis plausíveis e vão mudando
-    # gradualmente durante o dia, em vez de sortear tudo do zero a cada vez
-    # E assim temos um servidor funcionando bonitin
+    metricas, processos, operacao = gerar_metricas(
+        fluxo,
+        estado,
+        numero_leitura,
+        agora.hour
+    )
+
+    leitura = {
+        "timestamp": agora.strftime("%Y-%m-%d %H:%M:%S"),
+        "tipo_dia": tipo_dia,
+        "feriado": nome_feriado or "",
+        "metricas": metricas,
+        "processos": processos,
+        "operacao": operacao
+    }
+
+    return leitura
+
+
+# Transforma uma leitura no formato de colunas do CSV
+
+# Transforma dicionários dentro de dicionários em colunas do CSV
+def achatar_dicionario(dados, prefixo=""):
+    resultado = {}
+
+    for chave, valor in dados.items():
+        nome_coluna = f"{prefixo}_{chave}" if prefixo else chave
+
+        if isinstance(valor, dict):
+            resultado.update(
+                achatar_dicionario(valor, nome_coluna)
+            )
+        else:
+            resultado[nome_coluna] = valor
+
+    return resultado
+
+# Transforma dicionários dentro de dicionários em colunas do CSV
+# Organiza uma leitura em uma linha do CSV
+def preparar_linha(leitura):
+    linha = {
+        "timestamp": leitura["timestamp"],
+        "tipo_dia": leitura["tipo_dia"],
+        "feriado": leitura["feriado"],
+        "processos": json.dumps(
+            leitura["processos"],
+            ensure_ascii=False
+        )
+    }
+
+    linha.update(
+        achatar_dicionario(leitura["metricas"], "metricas")
+    )
+
+    linha.update(
+        achatar_dicionario(leitura["operacao"], "operacao")
+    )
+
+    return linha
+
+
+# Salva cada leitura no mesmo arquivo CSV
+
+def salvar_leitura_csv(leitura, nome_arquivo, primeira_leitura):
+    linha = preparar_linha(leitura)
+
+    with open(
+        nome_arquivo,
+        "a",
+        newline="",
+        encoding="utf-8-sig" if primeira_leitura else "utf-8"
+    ) as arquivo:
+
+        escritor = csv.DictWriter(
+            arquivo,
+            fieldnames=list(linha.keys()),
+            delimiter=";"
+        )
+
+        if primeira_leitura:
+            escritor.writeheader()
+
+        escritor.writerow(linha)
+
+
+# Executa a captura continuamente até receber Ctrl + C
+
+if __name__ == "__main__":
+
+    agora = datetime.datetime.now()
+
+    dados_dia = inicializar_dia(agora)
+
+    tipo_dia, nome_feriado, total_diario, soma_pesos = dados_dia
+
     estado = {
         "cpu": 25.0,
         "ram": 35.0,
@@ -352,36 +477,79 @@ def gerar_leituras(data_inicio=None):
         "bytes_recebidos": 0
     }
 
-    leituras = []
+    numero_leitura = 0
 
-    for numero in range(QUANTIDADE_LEITURAS):
-        # Distribui os registros ao longo das 24 horas completas
-        segundos = numero * DURACAO_DIA_SEGUNDOS / QUANTIDADE_LEITURAS
-        timestamp = data_inicio + datetime.timedelta(seconds=segundos)
+    nome_arquivo = (
+        "leituras_free_flow_"
+        + agora.strftime("%Y%m%d_%H%M%S")
+        + ".csv"
+    )
 
-        fluxo = veiculos_por_leitura[numero]
+    print("PEDAGIO FREE FLOW INICIADO")
+    print("Tipo de dia:", tipo_dia)
+    print("Feriado:", nome_feriado or "Não")
+    print("Veículos previstos no dia:", total_diario)
+    print("Arquivo:", nome_arquivo)
+    print("Captura a cada 1 minuto.")
+    print("Pressione Ctrl + C para encerrar.\n")
 
-        metricas, processos, operacao = gerar_metricas(
-             fluxo,
-             estado,
-             numero,
-             timestamp.hour
-        )
+    primeira_leitura = True
 
-        leituras.append({
-            "timestamp": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-            "tipo_dia": tipo_dia,
-            "feriado": nome_feriado or "",
-            "metricas": metricas,
-            "processos": processos,
-            "operacao": operacao
-        })
+    try:
+        while True:
 
-    print(f"Leituras geradas: {len(leituras)}")
-    print(f"Passagens de veículos no dia: {total_diario}")
-    print(f"Tipo de dia: {tipo_dia}")
+            agora = datetime.datetime.now()
 
-    return leituras
+            # Prepara os dados novamente quando mudar o dia
+            if agora.date() != datetime.datetime.strptime(
+                dados_dia[0] + " " + agora.strftime("%Y-%m-%d"),
+                "%A %Y-%m-%d"
+            ).date() if False else False:
+                pass
+
+            numero_leitura += 1
+
+            leitura = gerar_leitura(
+                estado,
+                numero_leitura,
+                dados_dia
+            )
+
+            salvar_leitura_csv(
+                leitura,
+                nome_arquivo,
+                primeira_leitura
+            )
+
+            primeira_leitura = False
+
+            print(
+                f"Leitura {numero_leitura} | "
+                f"{leitura['timestamp']} | "
+                f"Veículos: {leitura['operacao']['veiculos']} | "
+                f"CPU: {leitura['metricas']['psutil.cpu_percent()']}% | "
+                f"RAM: {leitura['metricas']['psutil.virtual_memory()']['percent']}% | "
+                f"Cenário: {leitura['operacao']['cenario']}"
+            )
+
+            # Aguarda até o próximo minuto do relógio
+            proxima_leitura = (
+                datetime.datetime.now().replace(
+                    second=0,
+                    microsecond=0
+                ) + datetime.timedelta(minutes=1)
+            )
+
+            espera = (
+                proxima_leitura - datetime.datetime.now()
+            ).total_seconds()
+
+            time.sleep(max(0, espera))
+
+    except KeyboardInterrupt:
+        print("\n\nCaptura interrompida pelo usuário.")
+        print("Total de leituras:", numero_leitura)
+        print("Arquivo salvo:", nome_arquivo)
 
 
 def achatar_dicionario(dados, prefixo=""):
