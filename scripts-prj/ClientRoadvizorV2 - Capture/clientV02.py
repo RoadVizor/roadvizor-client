@@ -148,7 +148,25 @@ def obter_configuracao(mac):
         raise ValueError("A resposta da API não contém a lista de componentes.")
 
     return configuracao["componentes"]
+def obter_leituras_api(mac):
 
+    url = f"{API_BASE_URL}/api/monitoramento/{mac}/leituras"
+
+    resposta = requests.get(
+        url,
+        params={"limite": QTD_LEITURAS},
+        timeout=30
+    )
+
+    resposta.raise_for_status()
+
+    dados = resposta.json()
+
+    leituras = dados.get("leituras", [])
+
+    print(f"Leituras recebidas da API: {len(leituras)}")
+
+    return leituras
 
 def simular_carga(identificador, valor, tipo_dia):
     """

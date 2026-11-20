@@ -1,3 +1,4 @@
+
 # Bom, aqui é o simulador do pedagio
 # é melhor pra gente para parecer que estamos pegando dados reais
 
@@ -10,6 +11,15 @@ import json
 import time
 import os
 
+import sys
+
+# Permite acessar os módulos da pasta principal do projeto
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from database.connection import conectar
+
+ID_SERVIDOR = 1
+
 # Esse aq serve pra gente poder ver os dias 
 import holidays
 
@@ -20,11 +30,11 @@ QUANTIDADE_LEITURAS = 6000
 # Um dia tem 24 horas. Cada leitura ganha um horário dentro desse período.
 DURACAO_DIA_SEGUNDOS = 24 * 60 * 60
 
-# Valores fictícios para representar um servidor de pedágio.
-TOTAL_RAM_BYTES = 16 * 1024 ** 3
-TOTAL_DISCO_BYTES = 500 * 1024 ** 3
-TOTAL_SWAP_BYTES = 4 * 1024 ** 3
-TOTAL_REDE_MBPS = 1000
+# Capacidades de referência da máquina
+TOTAL_RAM_BYTES = 7 * 1024 ** 3
+TOTAL_DISCO_BYTES = 468 * 1024 ** 3
+TOTAL_SWAP_BYTES = 8 * 1024 ** 3
+TOTAL_REDE_MBPS = 195
 
 # Pega os feriados do Brasil considerando SP.
 # E identifica se é feriado ou n
@@ -458,6 +468,39 @@ def salvar_leitura_csv(leitura, nome_arquivo, primeira_leitura):
         escritor.writerow(linha)
 
 
+# Salva a leitura no banco de dados
+def salvar_leitura_log(leitura):
+    conexao = conectar()
+    cursor = conexao.cursor()
+
+    try:
+        titulo = f"Leitura Free Flow - {leitura['timestamp']}"
+        descricao = json.dumps(leitura, ensure_ascii=False, default=str)
+        status = leitura["operacao"]["cenario"]
+
+        sql = """
+            INSERT INTO log (servidor_id, titulo, descricao, status)
+            VALUES (%s, %s, %s, %s)
+        """
+
+        cursor.execute(sql, (
+            ID_SERVIDOR,
+            titulo,
+            descricao,
+            status
+        ))
+
+        conexao.commit()
+
+    except Exception:
+        conexao.rollback()
+        raise
+
+    finally:
+        cursor.close()
+        conexao.close()
+
+
 # Executa a captura continuamente até receber Ctrl + C
 
 if __name__ == "__main__":
@@ -501,11 +544,8 @@ if __name__ == "__main__":
             agora = datetime.datetime.now()
 
             # Prepara os dados novamente quando mudar o dia
-            if agora.date() != datetime.datetime.strptime(
-                dados_dia[0] + " " + agora.strftime("%Y-%m-%d"),
-                "%A %Y-%m-%d"
-            ).date() if False else False:
-                pass
+            if agora.date() != datetime.datetime.now().date():
+                dados_dia = inicializar_dia(agora)
 
             numero_leitura += 1
 
@@ -514,6 +554,9 @@ if __name__ == "__main__":
                 numero_leitura,
                 dados_dia
             )
+
+            # Salva a leitura no banco
+            salvar_leitura_log(leitura)
 
             salvar_leitura_csv(
                 leitura,
@@ -550,84 +593,3 @@ if __name__ == "__main__":
         print("\n\nCaptura interrompida pelo usuário.")
         print("Total de leituras:", numero_leitura)
         print("Arquivo salvo:", nome_arquivo)
-
-
-def achatar_dicionario(dados, prefixo=""):
-    resultado = {}
-
-    for chave, valor in dados.items():
-        nome_coluna = f"{prefixo}_{chave}" if prefixo else chave
-
-        if isinstance(valor, dict):
-            resultado.update(
-                achatar_dicionario(valor, nome_coluna)
-            )
-        else:
-            resultado[nome_coluna] = valor
-
-    return resultado
-
-# Aq é para transformar em csv
-def salvar_csv(leituras):
-    nome_arquivo = (
-        "leituras_free_flow_"
-        + datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        + ".csv"
-    )
-
-    linhas = []
-
-    for leitura in leituras:
-        linha = {
-            "timestamp": leitura["timestamp"],
-            "tipo_dia": leitura["tipo_dia"],
-            "feriado": leitura["feriado"],
-            "processos": json.dumps(
-                leitura["processos"],
-                ensure_ascii=False
-            )
-        }
-
-        linha.update(
-            achatar_dicionario(leitura["metricas"], "metricas")
-        )
-
-        linha.update(
-            achatar_dicionario(leitura["operacao"], "operacao")
-        )
-
-        linhas.append(linha)
-
-    colunas = list(linhas[0].keys())
-
-    with open(
-        nome_arquivo,
-        "w",
-        newline="",
-        encoding="utf-8-sig"
-    ) as arquivo:
-
-        escritor = csv.DictWriter(
-            arquivo,
-            fieldnames=colunas,
-            delimiter=";"
-        )
-
-        escritor.writeheader()
-        escritor.writerows(linhas)
-
-    print(f"\nArquivo CSV criado: {nome_arquivo}")
-    print(f"Total de registros salvos: {len(linhas)}")
-
-#  Executando este arquivo diretamente, ele gera as leituras
-# e mostra alguns registros para conferirmos se está tudo em ordem
-if __name__ == "__main__":
-    dados = gerar_leituras()
-
-    salvar_csv(dados)
-
-    print("\nPrimeira leitura:")
-    print(dados[0])
-
-    print("\nÚltima leitura:")
-    print(dados[-1])

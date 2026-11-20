@@ -1,3 +1,4 @@
+import json
 from database.connection import conectar
 
 def listar_componentes_monitorados(endereco_mac):
@@ -29,3 +30,50 @@ def listar_componentes_monitorados(endereco_mac):
     conexao.close()
 
     return componentes
+def listar_leituras_servidor(endereco_mac, limite=10):
+
+    conexao = conectar()
+    cursor = conexao.cursor(dictionary=True)
+
+    sql = """
+        SELECT
+            l.log_id,
+            l.servidor_id,
+            l.titulo,
+            l.descricao,
+            l.status
+        FROM log l
+        JOIN servidor s ON s.id_servidor = l.servidor_id
+        WHERE s.endereco_mac = %s
+        ORDER BY l.log_id DESC
+        LIMIT %s
+    """
+
+    try:
+        cursor.execute(sql, (endereco_mac, limite))
+        registros = cursor.fetchall()
+
+        leituras = []
+
+        for registro in registros:
+
+            descricao = registro["descricao"]
+
+            if isinstance(descricao, str):
+                descricao = json.loads(descricao)
+
+            leituras.append({
+                "log_id": registro["log_id"],
+                "servidor_id": registro["servidor_id"],
+                "titulo": registro["titulo"],
+                "status": registro["status"],
+                "leitura": descricao
+            })
+
+        leituras.reverse()
+
+        return leituras
+
+    finally:
+        cursor.close()
+        conexao.close()
