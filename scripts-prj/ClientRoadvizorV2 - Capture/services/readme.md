@@ -347,3 +347,4 @@ A atualização separa as responsabilidades de geração, armazenamento, consult
 - Integrar o monitoramento ao Data Lake do RoadVizor.
 
 **RoadVizor — Monitoramento inteligente para operações Free Flow.**
+
