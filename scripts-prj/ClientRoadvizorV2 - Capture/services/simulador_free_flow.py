@@ -3,6 +3,8 @@
 
 import datetime
 import random
+import csv
+import json
 
 # Esse aq serve pra gente poder ver os dias 
 import holidays
@@ -119,9 +121,8 @@ def distribuir_veiculos(data_inicio, tipo_dia):
 
     return veiculos, total_diario
 
-
+#Transforma o movimento de veículos em métricas coerentes do servidor
 def gerar_metricas(fluxo, estado, numero_leitura):
-    """Transforma o movimento de veículos em métricas coerentes do servidor."""
 
     # Cada registro cobre cerca de 14,4 segundos. Convertendo para uma taxa
     # por minuto, conseguimos comparar o movimento com uma carga de servidor
@@ -363,10 +364,79 @@ def gerar_leituras(data_inicio=None):
     return leituras
 
 
+def achatar_dicionario(dados, prefixo=""):
+    resultado = {}
+
+    for chave, valor in dados.items():
+        nome_coluna = f"{prefixo}_{chave}" if prefixo else chave
+
+        if isinstance(valor, dict):
+            resultado.update(
+                achatar_dicionario(valor, nome_coluna)
+            )
+        else:
+            resultado[nome_coluna] = valor
+
+    return resultado
+
+# Aq é para transformar em csv
+def salvar_csv(leituras):
+    nome_arquivo = (
+        "leituras_free_flow_"
+        + datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        + ".csv"
+    )
+
+    linhas = []
+
+    for leitura in leituras:
+        linha = {
+            "timestamp": leitura["timestamp"],
+            "tipo_dia": leitura["tipo_dia"],
+            "feriado": leitura["feriado"],
+            "processos": json.dumps(
+                leitura["processos"],
+                ensure_ascii=False
+            )
+        }
+
+        linha.update(
+            achatar_dicionario(leitura["metricas"], "metricas")
+        )
+
+        linha.update(
+            achatar_dicionario(leitura["operacao"], "operacao")
+        )
+
+        linhas.append(linha)
+
+    colunas = list(linhas[0].keys())
+
+    with open(
+        nome_arquivo,
+        "w",
+        newline="",
+        encoding="utf-8-sig"
+    ) as arquivo:
+
+        escritor = csv.DictWriter(
+            arquivo,
+            fieldnames=colunas,
+            delimiter=";"
+        )
+
+        escritor.writeheader()
+        escritor.writerows(linhas)
+
+    print(f"\nArquivo CSV criado: {nome_arquivo}")
+    print(f"Total de registros salvos: {len(linhas)}")
+
 #  Executando este arquivo diretamente, ele gera as leituras
 # e mostra alguns registros para conferirmos se está tudo em ordem
 if __name__ == "__main__":
     dados = gerar_leituras()
+
+    salvar_csv(dados)
 
     print("\nPrimeira leitura:")
     print(dados[0])
