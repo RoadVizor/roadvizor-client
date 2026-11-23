@@ -1,6 +1,6 @@
 from database import buscar_enderecos, salvar_clima
 from weather_api import consultar_clima
-
+from csv_service import salvar_csv
 
 # Executa uma coleta climática para cada endereço cadastrado
 def lambda_handler(event=None, context=None):
@@ -39,7 +39,7 @@ def lambda_handler(event=None, context=None):
 
             salvar_clima(endereco["id_endereco"], clima)
 
-            resultados.append(resultado)
+            salvar_csv(resultado)
 
-            print("Coleta realizada:", resultado)
+            resultados.append(resultado)
     return resultados
