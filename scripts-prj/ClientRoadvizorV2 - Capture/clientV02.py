@@ -19,13 +19,18 @@ from getmac import get_mac_address
 
 # Configurações
 API_BASE_URL = os.getenv("ROADVIZOR_API_URL", "http://127.0.0.1:5000")
-BUCKET_NAME = "datalake-bronze-roadvizor-sptech"
+BUCKET_NAME = "datalake-roadvizor-sptech"
 AWS_REGION = "us-east-1"
 QTD_LEITURAS = 10
 INTERVALO_LEITURAS = 1
 INTERVALO_PROCESSOS = 0.3
 TOP_N_PROCESSOS = 5
 SEPARADOR_CSV = ";"  # padrão do projeto: Bronze, Silver e Gold usam ";"
+CAMINHO_CONTROLE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "ultimo_log_id_enviado.json"
+)
+
 
 # Cada identificador recebido da API aponta para uma função autorizada.
 # SENHORES! EU PREFERI NÃO EXECUTAR DIRETAMENTE O TEXTO, AI MONTEI UM DICIONÁRIO
@@ -148,13 +153,18 @@ def obter_configuracao(mac):
         raise ValueError("A resposta da API não contém a lista de componentes.")
 
     return configuracao["componentes"]
-def obter_leituras_api(mac):
+def obter_leituras_api(mac, ultimo_log_id=None):
 
     url = f"{API_BASE_URL}/api/monitoramento/{mac}/leituras"
 
+    parametros = {"limite": QTD_LEITURAS}
+
+    if ultimo_log_id is not None:
+        parametros["ultimo_log_id"] = ultimo_log_id
+
     resposta = requests.get(
         url,
-        params={"limite": QTD_LEITURAS},
+        params=parametros,
         timeout=30
     )
 
@@ -164,9 +174,34 @@ def obter_leituras_api(mac):
 
     leituras = dados.get("leituras", [])
 
-    print(f"Leituras recebidas da API: {len(leituras)}")
+    print(f"Leituras novas recebidas da API: {len(leituras)}")
 
     return leituras
+
+
+def carregar_ultimo_log_id(mac):
+
+    if not os.path.exists(CAMINHO_CONTROLE):
+        return None
+
+    with open(CAMINHO_CONTROLE, "r", encoding="utf-8") as arquivo:
+        controle = json.load(arquivo)
+
+    if controle.get("mac") != mac:
+        return None
+
+    return controle.get("ultimo_log_id")
+
+
+def salvar_ultimo_log_id(mac, ultimo_log_id):
+
+    controle = {
+        "mac": mac,
+        "ultimo_log_id": ultimo_log_id
+    }
+
+    with open(CAMINHO_CONTROLE, "w", encoding="utf-8") as arquivo:
+        json.dump(controle, arquivo, indent=4)
 
 
 
@@ -527,24 +562,31 @@ def main():
     mac = obter_mac()
     print("MAC identificado:", mac)
 
-    # Consulta a configuração cadastrada na API.
     componentes = obter_configuracao(mac)
     print(f"Componentes habilitados recebidos da API: {len(componentes)}")
 
-    # Busca as leituras que já foram armazenadas no MySQL.
-    registros = obter_leituras_api(mac)
+    # Recupera o último log que já foi enviado ao S3.
+    ultimo_log_id = carregar_ultimo_log_id(mac)
+
+    if ultimo_log_id is None:
+        print("Primeira captura: buscando as últimas leituras.")
+    else:
+        print(f"Último log enviado: {ultimo_log_id}")
+
+    # Busca somente as leituras que ainda não foram enviadas.
+    registros = obter_leituras_api(mac, ultimo_log_id)
 
     if not registros:
-        raise RuntimeError("A API não retornou nenhuma leitura para enviar.")
+        print("Nenhuma leitura nova encontrada. Nenhum arquivo foi enviado.")
+        return
 
-    # Recupera informações estáticas da máquina.
     info_estatica = obter_informacoes_estaticas(mac)
 
     linhas = []
 
     for numero_leitura, registro in enumerate(registros, start=1):
 
-        print(f"\nConvertendo leitura {numero_leitura}/{len(registros)}")
+        print(f"\\nConvertendo leitura {numero_leitura}/{len(registros)}")
 
         linha = converter_leitura_para_linha(
             registro,
@@ -553,21 +595,26 @@ def main():
 
         linhas.append(linha)
 
-    # Monta o CSV em memória.
     conteudo_csv = gerar_csv(linhas)
-
     chave_s3 = gerar_chave_s3()
 
-    # Envia o arquivo para o S3 Bronze.
+    # Só atualiza o controle depois que o upload termina com sucesso.
     enviar_buffer_para_s3(
         conteudo_csv,
         BUCKET_NAME,
         chave_s3
     )
 
-    print(f"\nTotal de leituras enviadas: {len(linhas)}")
+    novo_ultimo_log_id = max(
+        int(registro["log_id"]) for registro in registros
+    )
 
- 
+    salvar_ultimo_log_id(mac, novo_ultimo_log_id)
+
+    print(f"\\nTotal de leituras enviadas: {len(linhas)}")
+    print(f"Último log_id registrado: {novo_ultimo_log_id}")
+
+
 if __name__ == "__main__":
     try:
         main()

@@ -31,12 +31,21 @@ def listar_componentes_monitorados(endereco_mac):
 
     return componentes
 
-def listar_leituras_servidor(endereco_mac, limite=10):
+
+def listar_leituras_servidor(endereco_mac, limite=10, ultimo_log_id=None):
 
     conexao = conectar()
     cursor = conexao.cursor(dictionary=True)
 
-    sql = """
+    filtro_log = ""
+    parametros = [endereco_mac]
+    ordem_sql = "ASC" if ultimo_log_id is not None else "DESC"
+
+    if ultimo_log_id is not None:
+        filtro_log = " AND l.log_id > %s"
+        parametros.append(ultimo_log_id)
+
+    sql = f"""
         SELECT
             l.log_id,
             l.servidor_id,
@@ -69,13 +78,16 @@ def listar_leituras_servidor(endereco_mac, limite=10):
             )
 
         WHERE s.endereco_mac = %s
+        {filtro_log}
 
-        ORDER BY l.log_id DESC
+        ORDER BY l.log_id {ordem_sql}
         LIMIT %s
     """
 
+    parametros.append(limite)
+
     try:
-        cursor.execute(sql, (endereco_mac, limite))
+        cursor.execute(sql, tuple(parametros))
         registros = cursor.fetchall()
 
         leituras = []
@@ -90,7 +102,6 @@ def listar_leituras_servidor(endereco_mac, limite=10):
             clima = None
 
             if registro["id_clima"] is not None:
-
                 clima = {
                     "temperatura": float(registro["temperatura"]) if registro["temperatura"] is not None else None,
                     "umidade": float(registro["umidade"]) if registro["umidade"] is not None else None,
@@ -111,10 +122,12 @@ def listar_leituras_servidor(endereco_mac, limite=10):
                 "clima": clima
             })
 
-        leituras.reverse()
+        if ultimo_log_id is None:
+            leituras.reverse()
 
         return leituras
 
     finally:
         cursor.close()
         conexao.close()
+

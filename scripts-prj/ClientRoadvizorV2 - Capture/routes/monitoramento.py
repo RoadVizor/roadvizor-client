@@ -20,16 +20,24 @@ def consultar_monitoramento(endereco_mac):
     })
 
 
+
 @monitoramento_bp.route('/api/monitoramento/<string:endereco_mac>/leituras', methods=['GET'])
 def consultar_leituras(endereco_mac):
 
     limite = request.args.get("limite", default=10, type=int)
     limite = max(1, min(limite, 100))
 
-    leituras = listar_leituras_servidor(endereco_mac, limite)
+    ultimo_log_id = request.args.get("ultimo_log_id", type=int)
+
+    leituras = listar_leituras_servidor(
+        endereco_mac,
+        limite,
+        ultimo_log_id
+    )
 
     return jsonify({
         "endereco_mac": endereco_mac,
         "total": len(leituras),
         "leituras": leituras
     })
+
