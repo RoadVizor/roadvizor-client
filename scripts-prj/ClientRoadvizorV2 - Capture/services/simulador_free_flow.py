@@ -1,4 +1,3 @@
-
 # Bom, aqui é o simulador do pedagio
 # é melhor pra gente para parecer que estamos pegando dados reais
 
@@ -18,7 +17,27 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.connection import conectar
 
-ID_SERVIDOR = 1
+
+# Busca todos os servidores cadastrados no banco
+# Assim, o simulador não fica preso a um ID fixo
+
+def buscar_servidores():
+
+    conexao = conectar()
+    cursor = conexao.cursor()
+
+    try:
+        cursor.execute("""
+            SELECT id_servidor, apelido
+            FROM servidor
+            ORDER BY id_servidor
+        """)
+
+        return cursor.fetchall()
+
+    finally:
+        cursor.close()
+        conexao.close()
 
 # Esse aq serve pra gente poder ver os dias 
 import holidays
@@ -422,8 +441,10 @@ def achatar_dicionario(dados, prefixo=""):
 
 # Transforma dicionários dentro de dicionários em colunas do CSV
 # Organiza uma leitura em uma linha do CSV
-def preparar_linha(leitura):
+def preparar_linha(leitura, servidor_id, apelido):
     linha = {
+        "servidor_id": servidor_id,
+        "servidor": apelido,
         "timestamp": leitura["timestamp"],
         "tipo_dia": leitura["tipo_dia"],
         "feriado": leitura["feriado"],
@@ -446,8 +467,8 @@ def preparar_linha(leitura):
 
 # Salva cada leitura no mesmo arquivo CSV
 
-def salvar_leitura_csv(leitura, nome_arquivo, primeira_leitura):
-    linha = preparar_linha(leitura)
+def salvar_leitura_csv(leitura, nome_arquivo, primeira_leitura, servidor_id, apelido):
+    linha = preparar_linha(leitura, servidor_id, apelido)
 
     with open(
         nome_arquivo,
@@ -469,7 +490,7 @@ def salvar_leitura_csv(leitura, nome_arquivo, primeira_leitura):
 
 
 # Salva a leitura no banco de dados
-def salvar_leitura_log(leitura):
+def salvar_leitura_log(leitura, servidor_id):
     conexao = conectar()
     cursor = conexao.cursor()
 
@@ -484,7 +505,7 @@ def salvar_leitura_log(leitura):
         """
 
         cursor.execute(sql, (
-            ID_SERVIDOR,
+            servidor_id,
             titulo,
             descricao,
             status
@@ -507,20 +528,14 @@ if __name__ == "__main__":
 
     agora = datetime.datetime.now()
 
-    dados_dia = inicializar_dia(agora)
+    # Cada servidor terá seu próprio estado de métricas e fluxo diário
+    estados_servidores = {}
 
-    tipo_dia, nome_feriado, total_diario, soma_pesos = dados_dia
+    servidores = buscar_servidores()
 
-    estado = {
-        "cpu": 25.0,
-        "ram": 35.0,
-        "disco": 45.0,
-        "latencia": 25.0,
-        "bytes_enviados": 0,
-        "bytes_recebidos": 0
-    }
-
-    numero_leitura = 0
+    if not servidores:
+        print("Nenhum servidor cadastrado foi encontrado.")
+        sys.exit()
 
     nome_arquivo = (
         "leituras_free_flow_"
@@ -528,10 +543,8 @@ if __name__ == "__main__":
         + ".csv"
     )
 
-    print("PEDAGIO FREE FLOW INICIADO")
-    print("Tipo de dia:", tipo_dia)
-    print("Feriado:", nome_feriado or "Não")
-    print("Veículos previstos no dia:", total_diario)
+    print("MONITORAMENTO FREE FLOW INICIADO")
+    print("Servidores encontrados:", len(servidores))
     print("Arquivo:", nome_arquivo)
     print("Captura a cada 1 minuto.")
     print("Pressione Ctrl + C para encerrar.\n")
@@ -543,37 +556,81 @@ if __name__ == "__main__":
 
             agora = datetime.datetime.now()
 
-            # Prepara os dados novamente quando mudar o dia
-            if agora.date() != datetime.datetime.now().date():
-                dados_dia = inicializar_dia(agora)
+            # Consulta novamente para identificar servidores cadastrados durante a execução
+            servidores = buscar_servidores()
 
-            numero_leitura += 1
+            for servidor in servidores:
 
-            leitura = gerar_leitura(
-                estado,
-                numero_leitura,
-                dados_dia
-            )
+                servidor_id = servidor[0]
+                apelido = servidor[1] or f"Servidor {servidor_id}"
 
-            # Salva a leitura no banco
-            salvar_leitura_log(leitura)
+                # Inicializa um estado independente para cada servidor novo
+                if servidor_id not in estados_servidores:
 
-            salvar_leitura_csv(
-                leitura,
-                nome_arquivo,
-                primeira_leitura
-            )
+                    estados_servidores[servidor_id] = {
+                        "estado": {
+                            "cpu": 25.0,
+                            "ram": 35.0,
+                            "disco": 45.0,
+                            "latencia": 25.0,
+                            "bytes_enviados": 0,
+                            "bytes_recebidos": 0
+                        },
+                        "dados_dia": inicializar_dia(agora),
+                        "data": agora.date(),
+                        "numero_leitura": 0
+                    }
 
-            primeira_leitura = False
+                    print("Novo servidor no monitoramento:", apelido)
 
-            print(
-                f"Leitura {numero_leitura} | "
-                f"{leitura['timestamp']} | "
-                f"Veículos: {leitura['operacao']['veiculos']} | "
-                f"CPU: {leitura['metricas']['psutil.cpu_percent()']}% | "
-                f"RAM: {leitura['metricas']['psutil.virtual_memory()']['percent']}% | "
-                f"Cenário: {leitura['operacao']['cenario']}"
-            )
+                dados_servidor = estados_servidores[servidor_id]
+
+                # Atualiza o cenário diário quando a data mudar
+                if dados_servidor["data"] != agora.date():
+                    dados_servidor["dados_dia"] = inicializar_dia(agora)
+                    dados_servidor["data"] = agora.date()
+
+                dados_servidor["numero_leitura"] += 1
+
+                try:
+                    leitura = gerar_leitura(
+                        dados_servidor["estado"],
+                        dados_servidor["numero_leitura"],
+                        dados_servidor["dados_dia"]
+                    )
+
+                    # Inclui a identificação do servidor dentro do JSON
+                    leitura["servidor_id"] = servidor_id
+                    leitura["servidor"] = apelido
+
+                    # Salva a leitura vinculada ao servidor correto
+                    salvar_leitura_log(leitura, servidor_id)
+
+                    salvar_leitura_csv(
+                        leitura,
+                        nome_arquivo,
+                        primeira_leitura,
+                        servidor_id,
+                        apelido
+                    )
+
+                    primeira_leitura = False
+
+                    print(
+                        f"Servidor {servidor_id} - {apelido} | "
+                        f"Leitura {dados_servidor['numero_leitura']} | "
+                        f"{leitura['timestamp']} | "
+                        f"Veículos: {leitura['operacao']['veiculos']} | "
+                        f"CPU: {leitura['metricas']['psutil.cpu_percent()']}% | "
+                        f"RAM: {leitura['metricas']['psutil.virtual_memory()']['percent']}% | "
+                        f"Cenário: {leitura['operacao']['cenario']}"
+                    )
+
+                except Exception as erro:
+                    print(
+                        f"Erro ao processar o servidor {servidor_id} "
+                        f"({apelido}): {erro}"
+                    )
 
             # Aguarda até o próximo minuto do relógio
             proxima_leitura = (
@@ -591,5 +648,19 @@ if __name__ == "__main__":
 
     except KeyboardInterrupt:
         print("\n\nCaptura interrompida pelo usuário.")
-        print("Total de leituras:", numero_leitura)
+
+        total_leituras = sum(
+            dados["numero_leitura"]
+            for dados in estados_servidores.values()
+        )
+
+        print("Total de leituras por servidor:")
+
+        for servidor_id, dados in estados_servidores.items():
+            print(
+                f"Servidor {servidor_id}: "
+                f"{dados['numero_leitura']} leituras"
+            )
+
+        print("Total geral de leituras:", total_leituras)
         print("Arquivo salvo:", nome_arquivo)
