@@ -8,18 +8,15 @@ from botocore.exceptions import ClientError, NoCredentialsError
 
 REGIAO_AWS = "us-east-1"
 
-BUCKET_BRONZE = "datalake-bronze-roadvizor-sptech"
-BUCKET_SILVER = "datalake-silver-roadvizor-sptech"
+BUCKET_BRONZE = "datalake-roadvizor-sptech"
+BUCKET_SILVER = "datalake-roadvizor-sptech"
 
 PREFIXO_BRONZE = "raw/"
 PREFIXO_SILVER = "trusted/"
 
-# O clientV02 grava o CSV com ";" (constante SEPARADOR_CSV no client).
 SEPARADOR_BRONZE = ";"
-# Mesmo padrão do Bronze, compatível com a leitura atual da Gold.
 SEPARADOR_SILVER = ";"
 
-# Colunas que o clientV02 SEMPRE grava, independente dos componentes da API.
 COLUNAS_FIXAS = [
     "timestamp",
     "mac",
@@ -33,7 +30,6 @@ COLUNAS_FIXAS = [
     "processos",
 ]
 
-# Colunas de texto que nunca devem ser convertidas para número.
 COLUNAS_TEXTO = [
     "timestamp",
     "mac",
@@ -43,17 +39,29 @@ COLUNAS_TEXTO = [
     "tipo_dia",
     "feriado",
     "processos",
+    "clima_coletado_em",
+    "clima_condicao_climatica",
+    "clima_fonte_dados",
+    "status",
 ]
 
-TIPOS_DIA_VALIDOS = {"DIA_UTIL", "FIM_DE_SEMANA", "FERIADO"}
+COLUNAS_NUMERICAS_CLIMA = [
+    "clima_temperatura",
+    "clima_umidade",
+    "clima_velocidade_vento",
+    "clima_precipitacao",
+]
 
-# As colunas dos componentes são dinâmicas (dependem do campo "nome" cadastrado
-# na tabela componente). Regras genéricas aplicadas na Silver:
-#   - toda coluna terminada em "_percent" (ram, disco, swap...) fica entre 0 e 100;
-#   - componentes que retornam um número simples (ex.: CPU) viram uma coluna só
-#     com o nome do componente. Liste aqui o nome já sanitizado desses componentes
-#     (minúsculo, sem acento, com "_") para validar 0-100 também.
-COLUNAS_PERCENTUAIS_SIMPLES = ["cpu"]
+COLUNAS_PERCENTUAIS_SIMPLES = [
+    "cpu",
+    "clima_umidade",
+]
+
+TIPOS_DIA_VALIDOS = {
+    "DIA_UTIL",
+    "FIM_DE_SEMANA",
+    "FERIADO"
+}
 
 s3 = boto3.client("s3", region_name=REGIAO_AWS)
 
@@ -73,10 +81,7 @@ def buscar_csv_mais_recente():
         for arquivo in pagina.get("Contents", []):
             chave = arquivo["Key"]
 
-            if (
-                chave.lower().endswith(".csv")
-                and chave.startswith(PREFIXO_BRONZE)
-            ):
+            if chave.lower().endswith(".csv"):
                 arquivos.append(arquivo)
 
     if not arquivos:
@@ -106,8 +111,6 @@ def ler_csv_bronze(chave):
         BytesIO(conteudo),
         sep=SEPARADOR_BRONZE,
         encoding="utf-8",
-        # MAC como texto: sem isso, um MAC só com dígitos (ou com "E" no meio)
-        # seria lido como número e perderia zeros à esquerda.
         dtype={"mac": str}
     )
 
@@ -118,7 +121,7 @@ def ler_csv_bronze(chave):
 
 
 def validar_colunas(df):
-    """Verifica se o CSV possui as colunas fixas do client."""
+    """Verifica se o CSV possui as colunas obrigatórias."""
 
     colunas_ausentes = [
         coluna
@@ -139,38 +142,87 @@ def validar_colunas(df):
     ]
 
     print(
-        f"Colunas de componentes encontradas: {len(colunas_componentes)}"
+        f"Colunas adicionais encontradas: {len(colunas_componentes)}"
+    )
+
+    print(
+        "Colunas climáticas encontradas:",
+        [
+            coluna
+            for coluna in df.columns
+            if coluna.startswith("clima_")
+        ]
     )
 
 
 def tratar_tipos_dados(df):
     """Converte as colunas para os tipos adequados."""
 
+    df = df.copy()
+
     df["timestamp"] = pd.to_datetime(
         df["timestamp"],
-        format="%Y-%m-%d %H:%M:%S",
         errors="coerce"
     )
 
-    df["mac"] = df["mac"].astype("string").str.strip().str.upper()
-    df["tipo_dia"] = (
-        df["tipo_dia"].astype("string").str.strip().str.upper()
-    )
-    df["feriado"] = df["feriado"].astype("string").fillna("")
+    if "clima_coletado_em" in df.columns:
+        df["clima_coletado_em"] = pd.to_datetime(
+            df["clima_coletado_em"],
+            errors="coerce"
+        )
 
-    # Colunas dinâmicas lidas como texto: converte para número quando TODOS
-    # os valores preenchidos forem numéricos (ex.: duplex/flags continuam texto).
+    df["mac"] = (
+        df["mac"]
+        .astype("string")
+        .str.strip()
+        .str.upper()
+    )
+
+    df["tipo_dia"] = (
+        df["tipo_dia"]
+        .astype("string")
+        .str.strip()
+        .str.upper()
+    )
+
+    df["feriado"] = (
+        df["feriado"]
+        .fillna("")
+        .astype("string")
+    )
+
+    # Converte as métricas climáticas conhecidas para números.
+    for coluna in COLUNAS_NUMERICAS_CLIMA:
+        if coluna in df.columns:
+            df[coluna] = pd.to_numeric(
+                df[coluna],
+                errors="coerce"
+            )
+
+    # Trata as colunas dinâmicas dos componentes.
     for coluna in df.columns:
+
         if coluna in COLUNAS_TEXTO:
+            continue
+
+        if coluna in COLUNAS_NUMERICAS_CLIMA:
             continue
 
         serie = df[coluna]
 
-        if pd.api.types.is_numeric_dtype(serie) or pd.api.types.is_bool_dtype(serie):
+        if (
+            pd.api.types.is_numeric_dtype(serie)
+            or pd.api.types.is_bool_dtype(serie)
+        ):
             continue
 
-        convertida = pd.to_numeric(serie, errors="coerce")
+        convertida = pd.to_numeric(
+            serie,
+            errors="coerce"
+        )
 
+        # Só converte quando todos os valores preenchidos
+        # puderem ser interpretados como números.
         if convertida.notna().sum() == serie.notna().sum():
             df[coluna] = convertida
 
@@ -178,18 +230,18 @@ def tratar_tipos_dados(df):
 
 
 def colunas_percentuais(df):
-    """Retorna as colunas numéricas que representam percentual de uso."""
+    """Identifica as colunas que representam percentuais."""
 
     candidatas = [
         coluna
         for coluna in df.columns
-        if coluna.endswith("_percent")
+        if coluna.endswith(("_percent", "_pct"))
     ]
 
     candidatas += [
         coluna
         for coluna in COLUNAS_PERCENTUAIS_SIMPLES
-        if coluna in df.columns and coluna not in candidatas
+        if coluna in df.columns
     ]
 
     return [
@@ -200,42 +252,73 @@ def colunas_percentuais(df):
 
 
 def remover_registros_invalidos(df):
-    """Remove registros incompletos, inválidos ou duplicados."""
+    """Trata inconsistências sem descartar leituras válidas."""
 
     quantidade_inicial = len(df)
 
-    # Campos essenciais sempre presentes
-    df = df.dropna(subset=["timestamp", "mac", "tipo_dia"]).copy()
-    df = df[df["tipo_dia"].isin(TIPOS_DIA_VALIDOS)].copy()
+    df = df.copy()
 
-    # Percentuais entre 0 e 100 (valores vazios são mantidos)
+    # Timestamp e MAC são obrigatórios.
+    df["mac"] = df["mac"].replace("", pd.NA)
+
+    df = df.dropna(
+        subset=["timestamp", "mac", "tipo_dia"]
+    ).copy()
+
+    df = df[
+        df["tipo_dia"].isin(TIPOS_DIA_VALIDOS)
+    ].copy()
+
+    # Percentuais fora do intervalo viram valores vazios.
     for coluna in colunas_percentuais(df):
-        df = df[df[coluna].isna() | df[coluna].between(0, 100)].copy()
 
-    # Nenhuma métrica numérica coletada pode ser negativa
-    colunas_numericas = df.select_dtypes(include="number").columns
+        invalido = (
+            df[coluna].notna()
+            & ~df[coluna].between(0, 100)
+        )
 
-    if len(colunas_numericas) > 0:
-        mascara = (
-            df[colunas_numericas].isna() | (df[colunas_numericas] >= 0)
-        ).all(axis=1)
-        df = df[mascara].copy()
+        df.loc[invalido, coluna] = float("nan")
 
-    # Coerência: uso nunca pode passar do total (ram, swap, disco...)
+    # Métricas numéricas não podem ser negativas.
+    # A temperatura climática é uma exceção.
+    colunas_numericas = df.select_dtypes(
+        include="number"
+    ).columns
+
+    for coluna in colunas_numericas:
+
+        if coluna == "clima_temperatura":
+            continue
+
+        invalido = (
+            df[coluna].notna()
+            & (df[coluna] < 0)
+        )
+
+        df.loc[invalido, coluna] = float("nan")
+
+    # O valor utilizado não pode ultrapassar o total disponível.
     for coluna in list(df.columns):
+
         if not coluna.endswith("_total"):
             continue
 
-        coluna_usada = coluna[: -len("_total")] + "_used"
+        coluna_usada = (
+            coluna[:-len("_total")] + "_used"
+        )
 
-        if coluna_usada in df.columns:
-            df = df[
-                df[coluna].isna()
-                | df[coluna_usada].isna()
-                | (df[coluna_usada] <= df[coluna])
-            ].copy()
+        if coluna_usada not in df.columns:
+            continue
 
-    # Mantém apenas uma medição por máquina e instante.
+        invalido = (
+            df[coluna].notna()
+            & df[coluna_usada].notna()
+            & (df[coluna_usada] > df[coluna])
+        )
+
+        df.loc[invalido, coluna_usada] = float("nan")
+
+    # Mantém somente uma medição por máquina e instante.
     df = df.drop_duplicates(
         subset=["mac", "timestamp"],
         keep="last"
@@ -256,7 +339,7 @@ def remover_registros_invalidos(df):
 
 
 def interpretar_processos(valor):
-    """Converte o JSON da coluna 'processos' em dicionário (vazio se inválido)."""
+    """Converte o JSON dos processos em um dicionário."""
 
     if not isinstance(valor, str) or not valor.strip():
         return {}
@@ -270,14 +353,22 @@ def interpretar_processos(valor):
 
 
 def criar_colunas_processos(df):
-    """Abre o JSON de processos em colunas próprias."""
+    """Separa as informações dos processos em colunas."""
 
     linhas = []
 
     for valor in df["processos"]:
+
         dados = interpretar_processos(valor)
+
         top_cpu = dados.get("top_cpu") or {}
         top_ram = dados.get("top_ram") or {}
+
+        if not isinstance(top_cpu, dict):
+            top_cpu = {}
+
+        if not isinstance(top_ram, dict):
+            top_ram = {}
 
         linhas.append({
             "proc_totais": dados.get("total"),
@@ -296,7 +387,10 @@ def criar_colunas_processos(df):
             ),
         })
 
-    detalhes = pd.DataFrame(linhas, index=df.index)
+    detalhes = pd.DataFrame(
+        linhas,
+        index=df.index
+    )
 
     colunas_numericas = [
         "proc_totais",
@@ -310,11 +404,17 @@ def criar_colunas_processos(df):
     ]
 
     for coluna in colunas_numericas:
-        detalhes[coluna] = pd.to_numeric(detalhes[coluna], errors="coerce")
+        detalhes[coluna] = pd.to_numeric(
+            detalhes[coluna],
+            errors="coerce"
+        )
 
     df = df.drop(columns=["processos"])
 
-    return pd.concat([df, detalhes], axis=1)
+    return pd.concat(
+        [df, detalhes],
+        axis=1
+    )
 
 
 def criar_colunas_derivadas(df):
@@ -333,25 +433,43 @@ def criar_colunas_derivadas(df):
         6: "DOMINGO"
     }
 
-    df["dia_semana"] = df["timestamp"].dt.day_of_week.map(dias_semana)
-    df["fim_de_semana"] = df["timestamp"].dt.day_of_week >= 5
-    df["eh_feriado"] = df["tipo_dia"] == "FERIADO"
+    df["dia_semana"] = (
+        df["timestamp"].dt.day_of_week.map(dias_semana)
+    )
 
-    # Faixa de uso para cada percentual (ex.: ram_percent -> ram_faixa).
+    df["fim_de_semana"] = (
+        df["timestamp"].dt.day_of_week >= 5
+    )
+
+    df["eh_feriado"] = (
+        df["tipo_dia"] == "FERIADO"
+    )
+
+    # Cria faixas de utilização para os percentuais.
     for coluna in colunas_percentuais(df):
-        nome_faixa = coluna.removesuffix("_percent") + "_faixa"
+
+        nome_faixa = (
+            coluna.removesuffix("_percent")
+            .removesuffix("_pct")
+            + "_faixa"
+        )
 
         df[nome_faixa] = pd.cut(
             df[coluna],
             bins=[-0.001, 50, 75, 90, 100],
-            labels=["BAIXA", "MODERADA", "ALTA", "CRITICA"]
+            labels=[
+                "BAIXA",
+                "MODERADA",
+                "ALTA",
+                "CRITICA"
+            ]
         )
 
     return df
 
 
 def organizar_colunas(df):
-    """Organiza as colunas para facilitar a leitura do CSV."""
+    """Organiza as colunas para facilitar a leitura."""
 
     colunas_inicio = [
         "mac",
@@ -376,12 +494,17 @@ def organizar_colunas(df):
         if coluna.startswith("proc_")
     ]
 
-    inicio = [coluna for coluna in colunas_inicio if coluna in df.columns]
+    inicio = [
+        coluna
+        for coluna in colunas_inicio
+        if coluna in df.columns
+    ]
 
     meio = [
         coluna
         for coluna in df.columns
-        if coluna not in inicio and coluna not in colunas_fim
+        if coluna not in inicio
+        and coluna not in colunas_fim
     ]
 
     return df[inicio + meio + colunas_fim]
@@ -392,12 +515,15 @@ def salvar_csv_silver(df, chave_origem):
 
     nome_arquivo = chave_origem.split("/")[-1]
 
-    chave_destino = f"{PREFIXO_SILVER}{nome_arquivo}"
+    chave_destino = (
+        f"{PREFIXO_SILVER}{nome_arquivo}"
+    )
 
     conteudo_csv = df.to_csv(
         index=False,
         sep=SEPARADOR_SILVER,
-        encoding="utf-8"
+        encoding="utf-8",
+        na_rep=""
     )
 
     s3.put_object(
@@ -439,14 +565,18 @@ def main():
 
 
 if __name__ == "__main__":
+
     try:
         main()
+
     except NoCredentialsError:
         print(
             "Erro: credenciais AWS não encontradas. "
             "Verifique suas credenciais ou permissões IAM."
         )
+
     except ClientError as erro:
         print(f"Erro ao acessar o S3: {erro}")
+
     except (ValueError, FileNotFoundError) as erro:
         print(f"Erro no processamento: {erro}")
