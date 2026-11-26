@@ -1,5 +1,4 @@
 
-
 # O Blueprint permite organizar as rotas em arquivos separados, 
 # sem concentrar tudo no arquivo principal.
 # Só a nível de arquitetura a mudança

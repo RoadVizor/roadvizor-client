@@ -212,7 +212,6 @@ def converter_leitura_para_linha(registro, info_estatica):
     metricas = leitura.get("metricas", {})
     operacao = leitura.get("operacao", {})
     processos = leitura.get("processos", {})
-    clima = registro.get("clima") or {}
 
     # Cada identificador recebido do banco ganha um nome de coluna mais simples.
     nomes_metricas = {
@@ -250,18 +249,6 @@ def converter_leitura_para_linha(registro, info_estatica):
         processos,
         ensure_ascii=False
     )
-
-    # Adiciona os dados climáticos recebidos da API.
-    linha.update({
-        "clima_temperatura": clima.get("temperatura", ""),
-        "clima_umidade": clima.get("umidade", ""),
-        "clima_velocidade_vento": clima.get("velocidade_vento", ""),
-        "clima_direcao_vento": clima.get("direcao_vento", ""),
-        "clima_precipitacao": clima.get("precipitacao", ""),
-        "clima_condicao_climatica": clima.get("condicao_climatica", ""),
-        "clima_fonte_dados": clima.get("fonte_dados", ""),
-        "clima_coletado_em": clima.get("coletado_em", "")
-    })
 
     # Identificação do registro armazenado no banco.
     linha["log_id"] = registro.get("log_id")
@@ -622,3 +609,5 @@ if __name__ == "__main__":
         print(f"Erro ao consultar a API: {erro}")
     except Exception as erro:
         print(f"Erro durante a captura: {erro}")
+
+

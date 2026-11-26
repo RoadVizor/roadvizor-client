@@ -6,11 +6,13 @@ import random
 import csv
 import json
 
-#Simular em tempo real
+# Simular em tempo real
 import time
 import os
-
 import sys
+
+import boto3
+import holidays
 
 # Permite acessar os módulos da pasta principal do projeto
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -18,29 +20,19 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database.connection import conectar
 
 
-# Busca todos os servidores cadastrados no banco
-# Assim, o simulador não fica preso a um ID fixo
+# Configurações do bucket Bronze
+BUCKET_BRONZE = "datalake-roadvizor-sptech"
+PREFIXO_BRONZE = "raw/"
+REGIAO_AWS = "us-east-1"
 
-def buscar_servidores():
+# Pasta onde os CSVs também ficam salvos localmente
+PASTA_CAPTURAS = "capturas_bronze"
 
-    conexao = conectar()
-    cursor = conexao.cursor()
-
-    try:
-        cursor.execute("""
-            SELECT id_servidor, apelido
-            FROM servidor
-            ORDER BY id_servidor
-        """)
-
-        return cursor.fetchall()
-
-    finally:
-        cursor.close()
-        conexao.close()
-
-# Esse aq serve pra gente poder ver os dias 
-import holidays
+# Conexão com o S3 usando as credenciais configuradas na AWS
+s3 = boto3.client(
+    "s3",
+    region_name=REGIAO_AWS
+)
 
 
 # Leituras que ele vai produzir
@@ -54,6 +46,35 @@ TOTAL_RAM_BYTES = 7 * 1024 ** 3
 TOTAL_DISCO_BYTES = 468 * 1024 ** 3
 TOTAL_SWAP_BYTES = 8 * 1024 ** 3
 TOTAL_REDE_MBPS = 195
+
+
+# Busca os servidores cadastrados no banco de dados
+def buscar_servidores():
+
+    conexao = conectar()
+    cursor = conexao.cursor()
+
+    try:
+        cursor.execute("""
+            SELECT id_servidor, apelido
+            FROM servidor
+            ORDER BY id_servidor
+        """)
+
+        servidores = cursor.fetchall()
+
+        return [
+            (
+                servidor[0],
+                servidor[1] or f"Servidor {servidor[0]}"
+            )
+            for servidor in servidores
+        ]
+
+    finally:
+        cursor.close()
+        conexao.close()
+
 
 # Pega os feriados do Brasil considerando SP.
 # E identifica se é feriado ou n
@@ -73,8 +94,8 @@ def identificar_tipo_dia(data):
 
     return "DIA_UTIL", ""
 
-#Dá mais peso aos horários movimentados e menos peso à madrugada
 
+# Dá mais peso aos horários movimentados e menos peso à madrugada
 def obter_peso_horario(hora):
 
     if 0 <= hora < 5:
@@ -97,6 +118,7 @@ def obter_peso_horario(hora):
 
     return 0.40
 
+
 # Segura os valores dentro de uma faixa válida
 # Até pq é uma simulação, n bagunça
 def limitar(valor, minimo, maximo):
@@ -115,8 +137,8 @@ def variar_suavemente(valor_anterior, alvo, intensidade=0.18):
 
 
 # Distribui o total diário entre as leituras
-# O movimento fica concentrado nos horários de pico. ,
-# Em feriadoso total diário é dobrado 
+# O movimento fica concentrado nos horários de pico.
+# Em feriados o total diário é dobrado
 def distribuir_veiculos(data_inicio, tipo_dia):
 
     # Escolhe um volume diário
@@ -154,8 +176,8 @@ def distribuir_veiculos(data_inicio, tipo_dia):
 
     return veiculos, total_diario
 
-#Transforma o movimento de veículos em métricas coerentes do servidor
 
+# Transforma o movimento de veículos em métricas coerentes do servidor
 def gerar_metricas(fluxo, estado, numero_leitura, hora):
 
     # Agora cada registro representa um minuto real
@@ -165,7 +187,7 @@ def gerar_metricas(fluxo, estado, numero_leitura, hora):
     transacoes = max(0, fluxo + random.randint(-2, 3))
 
     # 20% de chance de sobrecarga por leitura
-        # A sobrecarga é mais frequente nos horários de maior movimento
+    # A sobrecarga é mais frequente nos horários de maior movimento
     if 0 <= hora < 5:
         chance_sobrecarga = 0.10
 
@@ -221,10 +243,9 @@ def gerar_metricas(fluxo, estado, numero_leitura, hora):
         500
     )
 
-
     # O disco cresce aos poucos conforme o servidor acumula registros
-    # Eu nem me lembro se  agente monitora isso mas eu coloquei 
-    # Por preucaução 
+    # Eu nem me lembro se agente monitora isso mas eu coloquei
+    # Por precaução
     estado["disco"] = limitar(
         estado["disco"] + random.uniform(0.0001, 0.0015),
         35,
@@ -232,7 +253,7 @@ def gerar_metricas(fluxo, estado, numero_leitura, hora):
     )
 
     # Contadores de rede acumulados, como os que uma ferramenta de
-    # monitoramento encontraria ao consultar as estatísticas 
+    # monitoramento encontraria ao consultar as estatísticas
     bytes_rede = transacoes * random.randint(1800, 4500)
     estado["bytes_enviados"] += bytes_rede
     estado["bytes_recebidos"] += bytes_rede * random.uniform(1.2, 2.0)
@@ -243,8 +264,6 @@ def gerar_metricas(fluxo, estado, numero_leitura, hora):
     swap_percent = limitar((estado["ram"] - 65) * 1.2, 0, 85)
     swap_usada = int(TOTAL_SWAP_BYTES * swap_percent / 100)
 
-    # Mantemos os identificadores iguais aos que o clientV02 já conhece
-    # Assim, a API continua escolhendo quais componentes entram no CSV
     metricas = {
         "psutil.cpu_percent()": round(estado["cpu"], 2),
 
@@ -355,7 +374,6 @@ def identificar_cenario(fluxo_por_minuto):
 # cada registro já recebe seu tempo correspondente
 
 # Prepara os dados do dia para calcular o fluxo por minuto
-
 def inicializar_dia(data):
     tipo_dia, nome_feriado = identificar_tipo_dia(data)
 
@@ -380,7 +398,6 @@ def inicializar_dia(data):
 
 
 # Calcula quantos veículos passam durante aquele minuto
-
 def calcular_fluxo_minuto(hora, total_diario, soma_pesos):
     peso = obter_peso_horario(hora)
 
@@ -390,7 +407,6 @@ def calcular_fluxo_minuto(hora, total_diario, soma_pesos):
 
 
 # Gera somente uma leitura usando o horário atual
-
 def gerar_leitura(estado, numero_leitura, dados_dia):
     agora = datetime.datetime.now()
 
@@ -439,6 +455,7 @@ def achatar_dicionario(dados, prefixo=""):
 
     return resultado
 
+
 # Transforma dicionários dentro de dicionários em colunas do CSV
 # Organiza uma leitura em uma linha do CSV
 def preparar_linha(leitura, servidor_id, apelido):
@@ -465,8 +482,7 @@ def preparar_linha(leitura, servidor_id, apelido):
     return linha
 
 
-# Salva cada leitura no mesmo arquivo CSV
-
+# Salva cada leitura no CSV do ciclo atual
 def salvar_leitura_csv(leitura, nome_arquivo, primeira_leitura, servidor_id, apelido):
     linha = preparar_linha(leitura, servidor_id, apelido)
 
@@ -489,80 +505,79 @@ def salvar_leitura_csv(leitura, nome_arquivo, primeira_leitura, servidor_id, ape
         escritor.writerow(linha)
 
 
-# Salva a leitura no banco de dados
-def salvar_leitura_log(leitura, servidor_id):
-    conexao = conectar()
-    cursor = conexao.cursor()
+# Envia o CSV diretamente para o bucket Bronze
+def enviar_para_bronze(nome_arquivo):
 
-    try:
-        titulo = f"Leitura Free Flow - {leitura['timestamp']}"
-        descricao = json.dumps(leitura, ensure_ascii=False, default=str)
-        status = leitura["operacao"]["cenario"]
+    nome_s3 = PREFIXO_BRONZE + os.path.basename(nome_arquivo)
 
-        sql = """
-            INSERT INTO log (servidor_id, titulo, descricao, status)
-            VALUES (%s, %s, %s, %s)
-        """
+    s3.upload_file(
+        nome_arquivo,
+        BUCKET_BRONZE,
+        nome_s3
+    )
 
-        cursor.execute(sql, (
-            servidor_id,
-            titulo,
-            descricao,
-            status
-        ))
-
-        conexao.commit()
-
-    except Exception:
-        conexao.rollback()
-        raise
-
-    finally:
-        cursor.close()
-        conexao.close()
+    print("CSV enviado para o S3:")
+    print(f"s3://{BUCKET_BRONZE}/{nome_s3}")
 
 
 # Executa a captura continuamente até receber Ctrl + C
-
 if __name__ == "__main__":
 
-    agora = datetime.datetime.now()
+    os.makedirs(PASTA_CAPTURAS, exist_ok=True)
 
     # Cada servidor terá seu próprio estado de métricas e fluxo diário
     estados_servidores = {}
 
-    servidores = buscar_servidores()
-
-    if not servidores:
-        print("Nenhum servidor cadastrado foi encontrado.")
-        sys.exit()
-
-    nome_arquivo = (
-        "leituras_free_flow_"
-        + agora.strftime("%Y%m%d_%H%M%S")
-        + ".csv"
-    )
-
     print("MONITORAMENTO FREE FLOW INICIADO")
-    print("Servidores encontrados:", len(servidores))
-    print("Arquivo:", nome_arquivo)
-    print("Captura a cada 1 minuto.")
+    print("Servidores: consulta ao banco de dados")
+    print("Bucket Bronze:", f"s3://{BUCKET_BRONZE}/{PREFIXO_BRONZE}")
+    print("Captura e envio a cada 1 minuto.")
     print("Pressione Ctrl + C para encerrar.\n")
-
-    primeira_leitura = True
 
     try:
         while True:
 
             agora = datetime.datetime.now()
 
-            # Consulta novamente para identificar servidores cadastrados durante a execução
-            servidores = buscar_servidores()
+            # Busca novamente os servidores cadastrados a cada ciclo
+            try:
+                servidores = buscar_servidores()
+
+                print(
+                    f"\nServidores encontrados no banco: {len(servidores)}"
+                )
+
+            except Exception as erro:
+                print("Erro ao consultar os servidores no banco:", erro)
+
+                proxima_leitura = (
+                    datetime.datetime.now().replace(
+                        second=0,
+                        microsecond=0
+                    ) + datetime.timedelta(minutes=1)
+                )
+
+                espera = (
+                    proxima_leitura - datetime.datetime.now()
+                ).total_seconds()
+
+                time.sleep(max(0, espera))
+                continue
+
+            nome_arquivo = os.path.join(
+                PASTA_CAPTURAS,
+                "roadvizor_"
+                + agora.strftime("%Y%m%d_%H%M%S")
+                + ".csv"
+            )
+
+            primeira_leitura = True
+            leituras_ciclo = 0
 
             for servidor in servidores:
 
                 servidor_id = servidor[0]
-                apelido = servidor[1] or f"Servidor {servidor_id}"
+                apelido = servidor[1]
 
                 # Inicializa um estado independente para cada servidor novo
                 if servidor_id not in estados_servidores:
@@ -599,13 +614,11 @@ if __name__ == "__main__":
                         dados_servidor["dados_dia"]
                     )
 
-                    # Inclui a identificação do servidor dentro do JSON
+                    # Inclui a identificação do servidor dentro da leitura
                     leitura["servidor_id"] = servidor_id
                     leitura["servidor"] = apelido
 
-                    # Salva a leitura vinculada ao servidor correto
-                    salvar_leitura_log(leitura, servidor_id)
-
+                    # Salva a leitura no CSV do ciclo atual
                     salvar_leitura_csv(
                         leitura,
                         nome_arquivo,
@@ -615,6 +628,7 @@ if __name__ == "__main__":
                     )
 
                     primeira_leitura = False
+                    leituras_ciclo += 1
 
                     print(
                         f"Servidor {servidor_id} - {apelido} | "
@@ -631,6 +645,19 @@ if __name__ == "__main__":
                         f"Erro ao processar o servidor {servidor_id} "
                         f"({apelido}): {erro}"
                     )
+
+            # Envia o arquivo completo depois de gerar as leituras dos servidores
+            if leituras_ciclo > 0:
+
+                try:
+                    enviar_para_bronze(nome_arquivo)
+
+                except Exception as erro:
+                    print("Erro ao enviar CSV para o S3:", erro)
+                    print("O arquivo continua salvo localmente:", nome_arquivo)
+
+            else:
+                print("Nenhuma leitura gerada neste ciclo.")
 
             # Aguarda até o próximo minuto do relógio
             proxima_leitura = (
@@ -663,4 +690,4 @@ if __name__ == "__main__":
             )
 
         print("Total geral de leituras:", total_leituras)
-        print("Arquivo salvo:", nome_arquivo)
+        print("Arquivos CSV salvos em:", PASTA_CAPTURAS)

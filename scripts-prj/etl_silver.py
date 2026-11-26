@@ -1,9 +1,9 @@
 import json
-from io import BytesIO
-
 import boto3
 import pandas as pd
-from botocore.exceptions import ClientError, NoCredentialsError
+
+from io import BytesIO
+from botocore.exceptions import ClientError, NoCredentialsError, BotoCoreError
 
 
 REGIAO_AWS = "us-east-1"
@@ -14,21 +14,45 @@ BUCKET_SILVER = "datalake-roadvizor-sptech"
 PREFIXO_BRONZE = "raw/"
 PREFIXO_SILVER = "trusted/"
 
-SEPARADOR_BRONZE = ";"
-SEPARADOR_SILVER = ";"
+SEPARADOR = ";"
 
-COLUNAS_FIXAS = [
-    "timestamp",
-    "mac",
-    "hostname",
-    "so_sistema",
-    "arquitetura",
-    "cpu_fisicos",
-    "cpu_logicos",
-    "tipo_dia",
-    "feriado",
-    "processos",
-]
+s3 = boto3.client("s3", region_name=REGIAO_AWS)
+
+
+# Nomes alternativos que podem chegar do Client V2
+ALIASES = {
+    "mac": [
+        "mac_address",
+        "mac_adress"
+    ],
+    "cpu": [
+        "cpu_pct",
+        "cpu_percent",
+        "cpu_percentual",
+        "metricas_psutil.cpu_percent()"
+    ],
+    "ram": [
+        "ram_pct",
+        "ram_percent",
+        "ram_percentual",
+        "metricas_psutil.virtual_memory()_percent"
+    ],
+    "rede_bytes_recv": [
+        "bytes_recv",
+        "bytes_received",
+        "metricas_psutil.net_io_counters()_bytes_recv",
+        "rede_interface_eth0_bytes_recv",
+        "rede_io_bytes_recv"
+    ],
+    "rede_bytes_sent": [
+        "bytes_sent",
+        "bytes_sended",
+        "metricas_psutil.net_io_counters()_bytes_sent",
+        "rede_interface_eth0_bytes_sent",
+        "rede_io_bytes_sent"
+    ]
+}
+
 
 COLUNAS_TEXTO = [
     "timestamp",
@@ -39,37 +63,23 @@ COLUNAS_TEXTO = [
     "tipo_dia",
     "feriado",
     "processos",
-    "clima_coletado_em",
-    "clima_condicao_climatica",
-    "clima_fonte_dados",
     "status",
+    "rede_interface_eth0_isup",
+    "rede_interface_eth0_duplex"
 ]
 
-COLUNAS_NUMERICAS_CLIMA = [
-    "clima_temperatura",
-    "clima_umidade",
-    "clima_velocidade_vento",
-    "clima_precipitacao",
-]
 
-COLUNAS_PERCENTUAIS_SIMPLES = [
-    "cpu",
-    "clima_umidade",
-]
-
-TIPOS_DIA_VALIDOS = {
+TIPOS_DIA_VALIDOS = [
     "DIA_UTIL",
     "FIM_DE_SEMANA",
     "FERIADO"
-}
-
-s3 = boto3.client("s3", region_name=REGIAO_AWS)
+]
 
 
 def buscar_csv_mais_recente():
-    """Localiza o CSV mais recente na camada Bronze."""
 
     arquivos = []
+
     paginador = s3.get_paginator("list_objects_v2")
 
     paginas = paginador.paginate(
@@ -78,7 +88,9 @@ def buscar_csv_mais_recente():
     )
 
     for pagina in paginas:
+
         for arquivo in pagina.get("Contents", []):
+
             chave = arquivo["Key"]
 
             if chave.lower().endswith(".csv"):
@@ -86,7 +98,7 @@ def buscar_csv_mais_recente():
 
     if not arquivos:
         raise FileNotFoundError(
-            "Nenhum arquivo CSV foi encontrado na camada Bronze."
+            "Nenhum CSV de infraestrutura encontrado na Bronze."
         )
 
     arquivo_mais_recente = max(
@@ -98,7 +110,6 @@ def buscar_csv_mais_recente():
 
 
 def ler_csv_bronze(chave):
-    """Lê o CSV armazenado na camada Bronze."""
 
     resposta = s3.get_object(
         Bucket=BUCKET_BRONZE,
@@ -109,54 +120,80 @@ def ler_csv_bronze(chave):
 
     df = pd.read_csv(
         BytesIO(conteudo),
-        sep=SEPARADOR_BRONZE,
-        encoding="utf-8",
+        sep=SEPARADOR,
+        encoding="utf-8-sig",
         dtype={"mac": str}
     )
 
-    print(f"Arquivo lido: {chave}")
-    print(f"Registros encontrados: {len(df)}")
+    print("Arquivo lido:", chave)
+    print("Registros encontrados:", len(df))
+
+    if df.empty:
+        raise ValueError("O CSV da Bronze está vazio.")
+
+    return df
+
+
+def padronizar_colunas(df):
+
+    df = df.copy()
+
+    df.columns = [
+        coluna.strip().lower()
+        for coluna in df.columns
+    ]
+
+    for destino, alternativas in ALIASES.items():
+
+        if destino not in df.columns:
+
+            for origem in alternativas:
+
+                if origem in df.columns:
+
+                    df.rename(
+                        columns={origem: destino},
+                        inplace=True
+                    )
+
+                    break
+
+    obrigatorias = [
+        "timestamp",
+        "mac",
+        "cpu",
+        "ram"
+    ]
+
+    for coluna in obrigatorias:
+
+        if coluna not in df.columns:
+
+            raise ValueError(
+                "Coluna obrigatória ausente: " + coluna
+            )
 
     return df
 
 
 def validar_colunas(df):
-    """Verifica se o CSV possui as colunas obrigatórias."""
 
-    colunas_ausentes = [
-        coluna
-        for coluna in COLUNAS_FIXAS
-        if coluna not in df.columns
-    ]
+    print("Validando estrutura do CSV...")
 
-    if colunas_ausentes:
-        raise ValueError(
-            "O CSV não possui todas as colunas necessárias: "
-            + ", ".join(colunas_ausentes)
-        )
-
-    colunas_componentes = [
-        coluna
-        for coluna in df.columns
-        if coluna not in COLUNAS_FIXAS
-    ]
+    print("Total de colunas:", len(df.columns))
 
     print(
-        f"Colunas adicionais encontradas: {len(colunas_componentes)}"
-    )
-
-    print(
-        "Colunas climáticas encontradas:",
+        "Colunas de rede:",
         [
             coluna
             for coluna in df.columns
-            if coluna.startswith("clima_")
+            if "rede" in coluna or "bytes_recv" in coluna
+            or "bytes_sent" in coluna
         ]
     )
 
 
 def tratar_tipos_dados(df):
-    """Converte as colunas para os tipos adequados."""
 
     df = df.copy()
 
@@ -165,12 +202,6 @@ def tratar_tipos_dados(df):
         errors="coerce"
     )
 
-    if "clima_coletado_em" in df.columns:
-        df["clima_coletado_em"] = pd.to_datetime(
-            df["clima_coletado_em"],
-            errors="coerce"
-        )
-
     df["mac"] = (
         df["mac"]
         .astype("string")
@@ -178,42 +209,57 @@ def tratar_tipos_dados(df):
         .str.upper()
     )
 
-    df["tipo_dia"] = (
-        df["tipo_dia"]
-        .astype("string")
-        .str.strip()
-        .str.upper()
-    )
+    if "hostname" in df.columns:
 
-    df["feriado"] = (
-        df["feriado"]
-        .fillna("")
-        .astype("string")
-    )
+        df["hostname"] = (
+            df["hostname"]
+            .astype("string")
+            .str.strip()
+        )
 
-    # Converte as métricas climáticas conhecidas para números.
-    for coluna in COLUNAS_NUMERICAS_CLIMA:
+    if "tipo_dia" in df.columns:
+
+        df["tipo_dia"] = (
+            df["tipo_dia"]
+            .astype("string")
+            .str.strip()
+            .str.upper()
+        )
+
+    if "feriado" in df.columns:
+
+        df["feriado"] = (
+            df["feriado"]
+            .fillna("")
+            .astype("string")
+        )
+
+    # Converte CPU, RAM e rede para números.
+    colunas_metricas = [
+        "cpu",
+        "ram",
+        "rede_bytes_recv",
+        "rede_bytes_sent"
+    ]
+
+    for coluna in colunas_metricas:
+
         if coluna in df.columns:
+
             df[coluna] = pd.to_numeric(
                 df[coluna],
                 errors="coerce"
             )
 
-    # Trata as colunas dinâmicas dos componentes.
+    # Converte as demais métricas numéricas.
     for coluna in df.columns:
 
         if coluna in COLUNAS_TEXTO:
             continue
 
-        if coluna in COLUNAS_NUMERICAS_CLIMA:
-            continue
-
         serie = df[coluna]
 
-        if (
-            pd.api.types.is_numeric_dtype(serie)
-            or pd.api.types.is_bool_dtype(serie)
-        ):
+        if pd.api.types.is_numeric_dtype(serie):
             continue
 
         convertida = pd.to_numeric(
@@ -221,56 +267,60 @@ def tratar_tipos_dados(df):
             errors="coerce"
         )
 
-        # Só converte quando todos os valores preenchidos
-        # puderem ser interpretados como números.
         if convertida.notna().sum() == serie.notna().sum():
+
             df[coluna] = convertida
 
     return df
 
 
-def colunas_percentuais(df):
-    """Identifica as colunas que representam percentuais."""
+def identificar_percentuais(df):
 
     candidatas = [
         coluna
         for coluna in df.columns
-        if coluna.endswith(("_percent", "_pct"))
+        if coluna.endswith("_percent")
+        or coluna.endswith("_pct")
     ]
 
     candidatas += [
-        coluna
-        for coluna in COLUNAS_PERCENTUAIS_SIMPLES
-        if coluna in df.columns
+        "cpu",
+        "ram"
     ]
 
     return [
         coluna
         for coluna in candidatas
-        if pd.api.types.is_numeric_dtype(df[coluna])
+        if coluna in df.columns
+        and pd.api.types.is_numeric_dtype(df[coluna])
     ]
 
 
 def remover_registros_invalidos(df):
-    """Trata inconsistências sem descartar leituras válidas."""
 
     quantidade_inicial = len(df)
 
     df = df.copy()
 
-    # Timestamp e MAC são obrigatórios.
     df["mac"] = df["mac"].replace("", pd.NA)
 
     df = df.dropna(
-        subset=["timestamp", "mac", "tipo_dia"]
+        subset=[
+            "timestamp",
+            "mac",
+            "cpu",
+            "ram"
+        ]
     ).copy()
 
-    df = df[
-        df["tipo_dia"].isin(TIPOS_DIA_VALIDOS)
-    ].copy()
+    if "tipo_dia" in df.columns:
 
-    # Percentuais fora do intervalo viram valores vazios.
-    for coluna in colunas_percentuais(df):
+        df = df[
+            df["tipo_dia"].isin(TIPOS_DIA_VALIDOS)
+        ].copy()
+
+    # Percentuais precisam estar entre 0 e 100.
+    for coluna in identificar_percentuais(df):
 
         invalido = (
             df[coluna].notna()
@@ -280,15 +330,11 @@ def remover_registros_invalidos(df):
         df.loc[invalido, coluna] = float("nan")
 
     # Métricas numéricas não podem ser negativas.
-    # A temperatura climática é uma exceção.
     colunas_numericas = df.select_dtypes(
         include="number"
     ).columns
 
     for coluna in colunas_numericas:
-
-        if coluna == "clima_temperatura":
-            continue
 
         invalido = (
             df[coluna].notna()
@@ -297,14 +343,14 @@ def remover_registros_invalidos(df):
 
         df.loc[invalido, coluna] = float("nan")
 
-    # O valor utilizado não pode ultrapassar o total disponível.
-    for coluna in list(df.columns):
+    # Valores usados não podem ultrapassar os totais.
+    for coluna in df.columns:
 
         if not coluna.endswith("_total"):
             continue
 
         coluna_usada = (
-            coluna[:-len("_total")] + "_used"
+            coluna[:-6] + "_used"
         )
 
         if coluna_usada not in df.columns:
@@ -318,17 +364,20 @@ def remover_registros_invalidos(df):
 
         df.loc[invalido, coluna_usada] = float("nan")
 
-    # Mantém somente uma medição por máquina e instante.
+    # Mantém uma leitura por servidor e instante.
     df = df.drop_duplicates(
         subset=["mac", "timestamp"],
         keep="last"
     )
 
-    quantidade_final = len(df)
-    removidos = quantidade_inicial - quantidade_final
+    df = df.sort_values(
+        by=["mac", "timestamp"]
+    ).copy()
 
-    print(f"Registros removidos: {removidos}")
-    print(f"Registros válidos: {quantidade_final}")
+    quantidade_final = len(df)
+
+    print("Registros removidos:", quantidade_inicial - quantidade_final)
+    print("Registros válidos:", quantidade_final)
 
     if df.empty:
         raise ValueError(
@@ -339,21 +388,25 @@ def remover_registros_invalidos(df):
 
 
 def interpretar_processos(valor):
-    """Converte o JSON dos processos em um dicionário."""
 
     if not isinstance(valor, str) or not valor.strip():
         return {}
 
     try:
+
         dados = json.loads(valor)
+
     except json.JSONDecodeError:
+
         return {}
 
     return dados if isinstance(dados, dict) else {}
 
 
 def criar_colunas_processos(df):
-    """Separa as informações dos processos em colunas."""
+
+    if "processos" not in df.columns:
+        return df
 
     linhas = []
 
@@ -371,20 +424,32 @@ def criar_colunas_processos(df):
             top_ram = {}
 
         linhas.append({
+
             "proc_totais": dados.get("total"),
+
             "proc_rodando": dados.get("rodando"),
+
             "proc_cpu_top_nome": top_cpu.get("nome"),
+
             "proc_cpu_top_pid": top_cpu.get("pid"),
+
             "proc_cpu_top_pct": top_cpu.get("cpu_pct"),
+
             "proc_cpu_top_threads": top_cpu.get("threads"),
+
             "proc_ram_top_nome": top_ram.get("nome"),
+
             "proc_ram_top_pid": top_ram.get("pid"),
+
             "proc_ram_top_mb": top_ram.get("ram_mb"),
+
             "proc_ram_top_pct": top_ram.get("ram_pct"),
+
             "proc_top_lista": json.dumps(
                 dados.get("top_processos_cpu", []),
                 ensure_ascii=False
-            ),
+            )
+
         })
 
     detalhes = pd.DataFrame(
@@ -400,16 +465,19 @@ def criar_colunas_processos(df):
         "proc_cpu_top_threads",
         "proc_ram_top_pid",
         "proc_ram_top_mb",
-        "proc_ram_top_pct",
+        "proc_ram_top_pct"
     ]
 
     for coluna in colunas_numericas:
+
         detalhes[coluna] = pd.to_numeric(
             detalhes[coluna],
             errors="coerce"
         )
 
-    df = df.drop(columns=["processos"])
+    df = df.drop(
+        columns=["processos"]
+    )
 
     return pd.concat(
         [df, detalhes],
@@ -418,10 +486,16 @@ def criar_colunas_processos(df):
 
 
 def criar_colunas_derivadas(df):
-    """Cria colunas úteis para análises posteriores."""
 
-    df["data"] = df["timestamp"].dt.strftime("%Y-%m-%d")
-    df["hora"] = df["timestamp"].dt.strftime("%H:%M:%S")
+    df = df.copy()
+
+    df["data"] = df["timestamp"].dt.strftime(
+        "%Y-%m-%d"
+    )
+
+    df["hora"] = df["timestamp"].dt.strftime(
+        "%H:%M:%S"
+    )
 
     dias_semana = {
         0: "SEGUNDA",
@@ -434,25 +508,25 @@ def criar_colunas_derivadas(df):
     }
 
     df["dia_semana"] = (
-        df["timestamp"].dt.day_of_week.map(dias_semana)
+        df["timestamp"]
+        .dt.day_of_week
+        .map(dias_semana)
     )
 
     df["fim_de_semana"] = (
         df["timestamp"].dt.day_of_week >= 5
     )
 
-    df["eh_feriado"] = (
-        df["tipo_dia"] == "FERIADO"
-    )
+    if "tipo_dia" in df.columns:
 
-    # Cria faixas de utilização para os percentuais.
-    for coluna in colunas_percentuais(df):
-
-        nome_faixa = (
-            coluna.removesuffix("_percent")
-            .removesuffix("_pct")
-            + "_faixa"
+        df["eh_feriado"] = (
+            df["tipo_dia"] == "FERIADO"
         )
+
+    # Cria classificações para os percentuais.
+    for coluna in identificar_percentuais(df):
+
+        nome_faixa = coluna + "_faixa"
 
         df[nome_faixa] = pd.cut(
             df[coluna],
@@ -469,15 +543,12 @@ def criar_colunas_derivadas(df):
 
 
 def organizar_colunas(df):
-    """Organiza as colunas para facilitar a leitura."""
 
     colunas_inicio = [
         "mac",
         "hostname",
         "so_sistema",
         "arquitetura",
-        "cpu_fisicos",
-        "cpu_logicos",
         "timestamp",
         "data",
         "hora",
@@ -486,9 +557,13 @@ def organizar_colunas(df):
         "feriado",
         "fim_de_semana",
         "eh_feriado",
+        "cpu",
+        "ram",
+        "rede_bytes_recv",
+        "rede_bytes_sent"
     ]
 
-    colunas_fim = [
+    colunas_processos = [
         coluna
         for coluna in df.columns
         if coluna.startswith("proc_")
@@ -504,24 +579,25 @@ def organizar_colunas(df):
         coluna
         for coluna in df.columns
         if coluna not in inicio
-        and coluna not in colunas_fim
+        and coluna not in colunas_processos
     ]
 
-    return df[inicio + meio + colunas_fim]
+    return df[
+        inicio + meio + colunas_processos
+    ]
 
 
 def salvar_csv_silver(df, chave_origem):
-    """Salva o CSV tratado na camada Silver."""
 
     nome_arquivo = chave_origem.split("/")[-1]
 
     chave_destino = (
-        f"{PREFIXO_SILVER}{nome_arquivo}"
+        PREFIXO_SILVER + nome_arquivo
     )
 
     conteudo_csv = df.to_csv(
         index=False,
-        sep=SEPARADOR_SILVER,
+        sep=SEPARADOR,
         encoding="utf-8",
         na_rep=""
     )
@@ -533,19 +609,22 @@ def salvar_csv_silver(df, chave_origem):
         ContentType="text/csv; charset=utf-8"
     )
 
-    print(f"Arquivo salvo na Silver: {chave_destino}")
-    print(f"Total de registros: {len(df)}")
-    print(f"Total de colunas: {len(df.columns)}")
+    print("Arquivo salvo na Silver:", chave_destino)
+    print("Total de registros:", len(df))
+    print("Total de colunas:", len(df.columns))
 
 
 def main():
-    """Executa o processo ETL da camada Silver."""
 
-    print("Iniciando ETL Silver...")
+    print("Iniciando ETL Silver RoadVizor...")
+
+    print("Lendo dados de infraestrutura...")
 
     chave_origem = buscar_csv_mais_recente()
 
     df = ler_csv_bronze(chave_origem)
+
+    df = padronizar_colunas(df)
 
     validar_colunas(df)
 
@@ -561,22 +640,8 @@ def main():
 
     salvar_csv_silver(df, chave_origem)
 
-    print("ETL Silver finalizado com sucesso!")
+    print("\nETL Silver RoadVizor finalizada!")
 
 
 if __name__ == "__main__":
-
-    try:
-        main()
-
-    except NoCredentialsError:
-        print(
-            "Erro: credenciais AWS não encontradas. "
-            "Verifique suas credenciais ou permissões IAM."
-        )
-
-    except ClientError as erro:
-        print(f"Erro ao acessar o S3: {erro}")
-
-    except (ValueError, FileNotFoundError) as erro:
-        print(f"Erro no processamento: {erro}")
+    main()
