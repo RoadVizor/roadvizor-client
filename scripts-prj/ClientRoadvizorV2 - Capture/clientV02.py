@@ -19,18 +19,13 @@ from getmac import get_mac_address
 
 # Configurações
 API_BASE_URL = os.getenv("ROADVIZOR_API_URL", "http://127.0.0.1:5000")
-BUCKET_NAME = "datalake-roadvizor-sptech"
+BUCKET_NAME = "datalake-bronze-roadvizor-sptech"
 AWS_REGION = "us-east-1"
 QTD_LEITURAS = 10
 INTERVALO_LEITURAS = 1
 INTERVALO_PROCESSOS = 0.3
 TOP_N_PROCESSOS = 5
 SEPARADOR_CSV = ";"  # padrão do projeto: Bronze, Silver e Gold usam ";"
-CAMINHO_CONTROLE = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "ultimo_log_id_enviado.json"
-)
-
 
 # Cada identificador recebido da API aponta para uma função autorizada.
 # SENHORES! EU PREFERI NÃO EXECUTAR DIRETAMENTE O TEXTO, AI MONTEI UM DICIONÁRIO
@@ -153,109 +148,7 @@ def obter_configuracao(mac):
         raise ValueError("A resposta da API não contém a lista de componentes.")
 
     return configuracao["componentes"]
-def obter_leituras_api(mac, ultimo_log_id=None):
 
-    url = f"{API_BASE_URL}/api/monitoramento/{mac}/leituras"
-
-    parametros = {"limite": QTD_LEITURAS}
-
-    if ultimo_log_id is not None:
-        parametros["ultimo_log_id"] = ultimo_log_id
-
-    resposta = requests.get(
-        url,
-        params=parametros,
-        timeout=30
-    )
-
-    resposta.raise_for_status()
-
-    dados = resposta.json()
-
-    leituras = dados.get("leituras", [])
-
-    print(f"Leituras novas recebidas da API: {len(leituras)}")
-
-    return leituras
-
-
-def carregar_ultimo_log_id(mac):
-
-    if not os.path.exists(CAMINHO_CONTROLE):
-        return None
-
-    with open(CAMINHO_CONTROLE, "r", encoding="utf-8") as arquivo:
-        controle = json.load(arquivo)
-
-    if controle.get("mac") != mac:
-        return None
-
-    return controle.get("ultimo_log_id")
-
-
-def salvar_ultimo_log_id(mac, ultimo_log_id):
-
-    controle = {
-        "mac": mac,
-        "ultimo_log_id": ultimo_log_id
-    }
-
-    with open(CAMINHO_CONTROLE, "w", encoding="utf-8") as arquivo:
-        json.dump(controle, arquivo, indent=4)
-
-
-
-def converter_leitura_para_linha(registro, info_estatica):
-
-    leitura = registro["leitura"]
-
-    metricas = leitura.get("metricas", {})
-    operacao = leitura.get("operacao", {})
-    processos = leitura.get("processos", {})
-
-    # Cada identificador recebido do banco ganha um nome de coluna mais simples.
-    nomes_metricas = {
-        "psutil.cpu_percent()": "cpu",
-        "psutil.virtual_memory()": "ram",
-        'psutil.disk_usage("/")': "disco",
-        "psutil.net_if_stats()": "rede_interface",
-        "psutil.net_io_counters()": "rede_io",
-        "psutil.swap_memory()": "swap",
-        "psutil.disk_io_counters()": "disco_io"
-    }
-
-    linha = {
-        "timestamp": leitura.get("timestamp", ""),
-        **info_estatica,
-        "tipo_dia": leitura.get("tipo_dia", ""),
-        "feriado": leitura.get("feriado") or "",
-    }
-
-    # Transforma as métricas aninhadas em colunas.
-    for identificador, valor in metricas.items():
-
-        nome_coluna = nomes_metricas.get(
-            identificador,
-            sanitizar_nome_coluna(identificador)
-        )
-
-        linha.update(achatar_valor(nome_coluna, valor))
-
-    # Transforma as informações operacionais em colunas.
-    linha.update(achatar_valor("operacao", operacao))
-
-    # Mantém os dados dos processos em JSON para o Silver tratar depois.
-    linha["processos"] = json.dumps(
-        processos,
-        ensure_ascii=False
-    )
-
-    # Identificação do registro armazenado no banco.
-    linha["log_id"] = registro.get("log_id")
-    linha["servidor_id"] = registro.get("servidor_id")
-    linha["status"] = registro.get("status", "")
-
-    return linha
 
 def simular_carga(identificador, valor, tipo_dia):
     """
@@ -543,65 +436,44 @@ def coletar_linha(info_estatica, componentes, tipo_dia, nome_feriado=None):
     return linha
  
  
-
 def main():
-
     mac = obter_mac()
     print("MAC identificado:", mac)
-
+ 
+    # A configuração é consultada antes do início do lote de leituras.
     componentes = obter_configuracao(mac)
     print(f"Componentes habilitados recebidos da API: {len(componentes)}")
-
-    # Recupera o último log que já foi enviado ao S3.
-    ultimo_log_id = carregar_ultimo_log_id(mac)
-
-    if ultimo_log_id is None:
-        print("Primeira captura: buscando as últimas leituras.")
-    else:
-        print(f"Último log enviado: {ultimo_log_id}")
-
-    # Busca somente as leituras que ainda não foram enviadas.
-    registros = obter_leituras_api(mac, ultimo_log_id)
-
-    if not registros:
-        print("Nenhuma leitura nova encontrada. Nenhum arquivo foi enviado.")
-        return
-
+ 
+    agora = datetime.datetime.now()
+    tipo_dia, nome_feriado = identificar_tipo_dia(agora)
     info_estatica = obter_informacoes_estaticas(mac)
-
+ 
     linhas = []
-
-    for numero_leitura, registro in enumerate(registros, start=1):
-
-        print(f"\\nConvertendo leitura {numero_leitura}/{len(registros)}")
-
-        linha = converter_leitura_para_linha(
-            registro,
-            info_estatica
+ 
+    for numero_leitura in range(QTD_LEITURAS):
+        print(f"\nLeitura {numero_leitura + 1}/{QTD_LEITURAS}")
+ 
+        linha = coletar_linha(
+            info_estatica,
+            componentes,
+            tipo_dia,
+            nome_feriado
         )
-
         linhas.append(linha)
-
+ 
+        if numero_leitura < QTD_LEITURAS - 1:
+            time.sleep(INTERVALO_LEITURAS)
+ 
     conteudo_csv = gerar_csv(linhas)
     chave_s3 = gerar_chave_s3()
-
-    # Só atualiza o controle depois que o upload termina com sucesso.
+ 
     enviar_buffer_para_s3(
         conteudo_csv,
         BUCKET_NAME,
         chave_s3
     )
-
-    novo_ultimo_log_id = max(
-        int(registro["log_id"]) for registro in registros
-    )
-
-    salvar_ultimo_log_id(mac, novo_ultimo_log_id)
-
-    print(f"\\nTotal de leituras enviadas: {len(linhas)}")
-    print(f"Último log_id registrado: {novo_ultimo_log_id}")
-
-
+ 
+ 
 if __name__ == "__main__":
     try:
         main()
@@ -609,5 +481,3 @@ if __name__ == "__main__":
         print(f"Erro ao consultar a API: {erro}")
     except Exception as erro:
         print(f"Erro durante a captura: {erro}")
-
-
