@@ -18,7 +18,6 @@ dentro da função ajustar_regressao).
 """
 
 import json
-import os
 from datetime import datetime, timezone
 from io import BytesIO
 
@@ -26,11 +25,24 @@ import boto3
 import mysql.connector
 import numpy as np
 import pandas as pd
-from dotenv import load_dotenv
 from mysql.connector import Error
 from scipy import stats
 
-load_dotenv()
+# ---------------------------------------------------------------------------
+# CONFIGURAÇÕES PARA PREENCHER ANTES DE EXECUTAR
+# ---------------------------------------------------------------------------
+
+# Banco de dados (MySQL)
+DB_HOST = "localhost"
+DB_PORT = 3306
+DB_USER = "aluno"
+DB_PASSWORD = "sptech"
+DB_NAME = "roadvizor"
+
+# Buckets do S3 (camadas Silver e Gold) e região da AWS
+SILVER_BUCKET = "datalake-silver-roadvizor-sptech"
+GOLD_BUCKET = "datalake-gold-roadvizor-sptech"
+AWS_REGION = "us-east-1"
 
 # Componente do banco -> coluna do Silver que eu uso na análise.
 # A CPU já vem em %; a RAM vem em bytes (ram_used) e eu converto depois.
@@ -99,11 +111,11 @@ def buscar_servidores():
     Vem uma linha para cada combinação servidor + componente."""
     try:
         conexao = mysql.connector.connect(
-            host=os.getenv("DB_HOST"),
-            port=int(os.getenv("DB_PORT", 3306)),
-            user=os.getenv("DB_USER"),
-            password=os.getenv("DB_PASSWORD"),
-            database=os.getenv("DB_NAME")
+            host=DB_HOST,
+            port=DB_PORT,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME
         )
 
         cursor = conexao.cursor(dictionary=True)
@@ -155,10 +167,7 @@ def normalizar_mac(mac):
 def buscar_dados_silver(mac):
     """Lê todos os CSVs da pasta trusted/<MAC>/ (não só o mais recente) e junta
     tudo em um histórico só."""
-    bucket = os.getenv("SILVER_BUCKET")
-    regiao = os.getenv("AWS_REGION", "us-east-1")
-
-    s3 = boto3.client("s3", region_name=regiao)
+    s3 = boto3.client("s3", region_name=AWS_REGION)
 
     prefixo = f"trusted/{normalizar_mac(mac)}/"
 
@@ -168,12 +177,12 @@ def buscar_dados_silver(mac):
         paginador = s3.get_paginator("list_objects_v2")
         arquivos = []
 
-        for pagina in paginador.paginate(Bucket=bucket, Prefix=prefixo):
+        for pagina in paginador.paginate(Bucket=SILVER_BUCKET, Prefix=prefixo):
             for objeto in pagina.get("Contents", []):
                 if not objeto["Key"].endswith(".csv"):
                     continue
 
-                corpo = s3.get_object(Bucket=bucket, Key=objeto["Key"])["Body"].read()
+                corpo = s3.get_object(Bucket=SILVER_BUCKET, Key=objeto["Key"])["Body"].read()
 
                 # Leio só as colunas que preciso; a condição com lambda evita erro
                 # se alguma coluna não existir em um CSV mais antigo
@@ -659,27 +668,22 @@ def salvar_gold(dashboard, empresa_id):
     A chave é sempre a mesma, então cada execução sobrescreve o arquivo anterior
     (por isso não duplica se eu rodar de novo). Como é um arquivo só, quem lê pega
     a versão antiga ou a nova, nunca um arquivo pela metade."""
-    bucket = os.getenv("GOLD_BUCKET")
-
-    if not bucket:
-        raise ValueError("Variável de ambiente GOLD_BUCKET não definida.")
-
     chave = f"{PREFIXO_GOLD}/empresa_{empresa_id}/dashboard.json"
 
     # allow_nan=False: NaN não existe em JSON. Se aparecer algum, dá erro aqui em
     # vez de gravar um arquivo que o navegador não consegue ler
     corpo = json.dumps(dashboard, ensure_ascii=False, indent=2, allow_nan=False)
 
-    s3 = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
+    s3 = boto3.client("s3", region_name=AWS_REGION)
 
     s3.put_object(
-        Bucket=bucket,
+        Bucket=GOLD_BUCKET,
         Key=chave,
         Body=corpo.encode("utf-8"),
         ContentType="application/json; charset=utf-8",
     )
 
-    return f"s3://{bucket}/{chave}"
+    return f"s3://{GOLD_BUCKET}/{chave}"
 
 
 def imprimir_resumo(empresa_id, destino, dashboard):
