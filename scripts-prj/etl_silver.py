@@ -8,8 +8,8 @@ from botocore.exceptions import ClientError, NoCredentialsError, BotoCoreError
 
 REGIAO_AWS = "us-east-1"
 
-BUCKET_BRONZE = "datalake-roadvizor-sptech"
-BUCKET_SILVER = "datalake-roadvizor-sptech"
+BUCKET_BRONZE = "datalake-bronze-roadvizor-sptech"
+BUCKET_SILVER = "datalake-silver-roadvizor-sptech"
 
 PREFIXO_BRONZE = "raw/"
 PREFIXO_SILVER = "trusted/"
