@@ -250,7 +250,10 @@ Variáveis no topo do `clientV02.py`:
    ```bash
    python etl_gold.py
    ```
-
+5. **Executar o simulador de pedagio**
+   ```
+   python "./scripts-prj/ClientRoadvizorV2 - Capture/services/simulador_free_flow.py"
+   ´´´
 ---
 
 ## ⚠️ Pendências
